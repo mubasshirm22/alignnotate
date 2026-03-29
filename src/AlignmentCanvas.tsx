@@ -6,6 +6,7 @@ import type {
   Annotation,
   BlockLayout,
   ConservationColorOverrides,
+  CustomLegendItem,
   EspriptPreset,
   LayoutMetrics,
   RenderMode,
@@ -30,6 +31,8 @@ type Props = {
   conservationColors: ConservationColorOverrides | null;
   showConservationStrip: boolean;
   showLegend: boolean;
+  includeAutoLegend: boolean;
+  customLegendItems: CustomLegendItem[];
   secondaryStructureTrack: SecondaryStructureTrack | null;
   bottomStructureTrack: SecondaryStructureTrack | null;
   boxStrokeWidth: number;
@@ -67,6 +70,8 @@ export const AlignmentCanvas = forwardRef<SVGSVGElement, Props>(function Alignme
     conservationColors,
     showConservationStrip,
     showLegend,
+    includeAutoLegend,
+    customLegendItems,
     secondaryStructureTrack,
     bottomStructureTrack,
     boxStrokeWidth,
@@ -196,7 +201,9 @@ export const AlignmentCanvas = forwardRef<SVGSVGElement, Props>(function Alignme
       ))}
 
       <g>{annotationElements}</g>
-      {renderMode === "export" && showLegend ? renderLegend(width, height, visualizationMode, espriptPreset, conservationColors) : null}
+      {renderMode === "export" && showLegend
+        ? renderLegend(width, height, visualizationMode, espriptPreset, conservationColors, includeAutoLegend, customLegendItems)
+        : null}
       {interactive && pendingBridgeAnchor
         ? renderPendingBridgeAnchor(pendingBridgeAnchor, blocks, metrics, secondaryStructureTrack, renderMode)
         : null}
@@ -1102,60 +1109,91 @@ function renderLegend(
   visualizationMode: VisualizationMode,
   espriptPreset: EspriptPreset,
   conservationColors: ConservationColorOverrides | null,
+  includeAutoLegend: boolean,
+  customLegendItems: CustomLegendItem[],
 ) {
   const strictColor = conservationColors?.strict ?? "#d92d20";
   const similarColor = conservationColors?.similar ?? "#f79009";
   const frameColor = conservationColors?.similar ?? "#335cff";
-  const x = width - 196;
-  const y = height - 86;
+  const baseItems = includeAutoLegend
+    ? [
+        {
+          label: "Strict identity",
+          sample:
+            <g>
+              <rect x={0} y={-8} width={14} height={10} fill={strictColor} />
+              <text x={7} y={0.2} textAnchor="middle" className="legend-sample-invert">A</text>
+            </g>,
+        },
+        {
+          label: "Similar column",
+          sample:
+            visualizationMode === "espript" && espriptPreset === "flashy" ? (
+              <g>
+                <rect x={0} y={-8} width={14} height={10} fill="#ffef78" stroke="#d1b400" strokeWidth={0.8} />
+                <text x={7} y={0.2} textAnchor="middle" className="legend-sample-dark">A</text>
+              </g>
+            ) : (
+              <text x={7} y={0.2} textAnchor="middle" className="legend-sample-red" fill={visualizationMode === "espript" ? "#ff1f1f" : similarColor}>
+                A
+              </text>
+            ),
+        },
+        {
+          label: visualizationMode === "espript" && espriptPreset !== "identity" ? "Global similarity frame" : "Weak conservation",
+          sample:
+            visualizationMode === "espript" && espriptPreset !== "identity" ? (
+              <g>
+                <rect x={0} y={-8} width={14} height={10} fill="none" stroke={frameColor} strokeWidth={1} />
+                <text x={7} y={0.2} textAnchor="middle" className="legend-sample-dark">A</text>
+              </g>
+            ) : (
+              <rect x={0} y={-8} width={14} height={10} fill={conservationColors?.weak ?? "#fdb022"} />
+            ),
+        },
+      ]
+    : [];
+  const customItems = customLegendItems
+    .filter((item) => item.label.trim())
+    .map((item) => ({
+      label: item.label.trim(),
+      sample:
+        item.style === "outline" ? (
+          <rect x={0} y={-8} width={14} height={10} fill="none" stroke={item.color} strokeWidth={1.2} />
+        ) : item.style === "text" ? (
+          <text x={7} y={0.2} textAnchor="middle" className="legend-sample-dark" fill={item.color}>
+            A
+          </text>
+        ) : (
+          <rect x={0} y={-8} width={14} height={10} fill={item.color} />
+        ),
+    }));
+  const items = [...baseItems, ...customItems];
+  if (items.length === 0) {
+    return null;
+  }
+  const legendHeight = 24 + items.length * 15 + 8;
+  const x = width - 220;
+  const y = height - legendHeight - 12;
   const title = visualizationMode === "espript" ? `Legend · ESPript ${capitalize(espriptPreset)}` : "Legend";
 
   return (
     <g className="legend-group">
-      <rect x={x} y={y} width={168} height={66} rx={4} fill="#ffffff" stroke="#c7cfd8" strokeWidth={0.8} />
+      <rect x={x} y={y} width={192} height={legendHeight} rx={4} fill="#ffffff" stroke="#c7cfd8" strokeWidth={0.8} />
       <text x={x + 10} y={y + 13} className="legend-title">
         {title}
       </text>
-      <rect x={x + 10} y={y + 19} width={14} height={10} fill={strictColor} />
-      <text x={x + 17} y={y + 27.2} textAnchor="middle" className="legend-sample-invert">
-        A
-      </text>
-      <text x={x + 32} y={y + 27} className="legend-label">
-        Strict identity
-      </text>
-      {visualizationMode === "espript" && espriptPreset === "flashy" ? (
-        <>
-          <rect x={x + 10} y={y + 34} width={14} height={10} fill="#ffef78" stroke="#d1b400" strokeWidth={0.8} />
-          <text x={x + 17} y={y + 42.2} textAnchor="middle" className="legend-sample-dark">
-            A
-          </text>
-        </>
-      ) : (
-        <text x={x + 17} y={y + 42.2} textAnchor="middle" className="legend-sample-red" fill={visualizationMode === "espript" ? "#ff1f1f" : similarColor}>
-          A
-        </text>
-      )}
-      <text x={x + 32} y={y + 42} className="legend-label">
-        Similar column
-      </text>
-      {visualizationMode === "espript" && espriptPreset !== "identity" ? (
-        <>
-          <rect x={x + 10} y={y + 49} width={14} height={10} fill="none" stroke={frameColor} strokeWidth={1} />
-          <text x={x + 17} y={y + 57.2} textAnchor="middle" className="legend-sample-dark">
-            A
-          </text>
-          <text x={x + 32} y={y + 57} className="legend-label">
-            Global similarity frame
-          </text>
-        </>
-      ) : (
-        <>
-          <rect x={x + 10} y={y + 49} width={14} height={10} fill={conservationColors?.weak ?? "#fdb022"} />
-          <text x={x + 32} y={y + 57} className="legend-label">
-            Weak conservation
-          </text>
-        </>
-      )}
+      {items.map((item, index) => {
+        const rowY = y + 27 + index * 15;
+        return (
+          <g key={`${item.label}_${index}`}>
+            <g transform={`translate(${x + 10} ${rowY})`}>{item.sample}</g>
+            <text x={x + 32} y={rowY + 0.8} className="legend-label">
+              {item.label}
+            </text>
+          </g>
+        );
+      })}
     </g>
   );
 }
@@ -1286,30 +1324,31 @@ function helixCoilGroup(
   width: number,
   renderMode: RenderMode,
 ): ReactElement[] {
-  const radiusX = renderMode === "export" ? 3.55 : 4.05;
-  const radiusY = renderMode === "export" ? 3.1 : 3.6;
-  const pitch = radiusX * 1.34;
+  const radiusX = renderMode === "export" ? 3.15 : 3.6;
+  const radiusY = renderMode === "export" ? 3.7 : 4.15;
+  const pitch = radiusX * 1.55;
   const clipId = `helix_clip_${blockIndex}_${index}_${renderMode}`;
+  const baselineY = laneY + radiusY * 0.18;
   const elements: ReactElement[] = [
     <clipPath key={`${clipId}_clip`} id={clipId}>
-      <rect x={x} y={laneY - radiusY - 0.8} width={width} height={radiusY * 2 + 1.8} />
+      <rect x={x} y={laneY - radiusY - 0.7} width={width} height={radiusY * 1.22} />
     </clipPath>,
   ];
 
   const coils: ReactElement[] = [];
-  let cursor = x - radiusX * 0.7;
+  let cursor = x - radiusX * 0.88;
   let coil = 0;
   while (cursor <= x + width + radiusX) {
     coils.push(
       <ellipse
         key={`${clipId}_${coil}`}
         cx={cursor + radiusX}
-        cy={laneY}
+        cy={baselineY}
         rx={radiusX}
         ry={radiusY}
         fill="none"
-        stroke="#4a5568"
-        strokeWidth={renderMode === "export" ? 1.15 : 1.3}
+        stroke="#5f6b7a"
+        strokeWidth={renderMode === "export" ? 1.12 : 1.26}
       />,
     );
     cursor += pitch;

@@ -11,6 +11,7 @@ import type {
   Annotation,
   CellAnchor,
   ConservationColorOverrides,
+  CustomLegendItem,
   EspriptPreset,
   SecondaryStructureTrack,
   Selection,
@@ -18,6 +19,9 @@ import type {
   Tool,
   VisualizationMode,
 } from "./types";
+
+type AppPage = "app" | "examples" | "quickstart" | "contact";
+type ExportPreset = "paper" | "slide" | "poster" | "custom";
 
 const toolOptions: { id: Tool; label: string }[] = [
   { id: "select", label: "Select" },
@@ -63,12 +67,37 @@ const toolIcons: Record<Tool, string> = {
   erase: "⌫",
 };
 
+const toolMeta: Record<Tool, { tone: "region" | "marker" | "connector" | "label" | "utility"; hint: string }> = {
+  select: { tone: "utility", hint: "Inspect" },
+  highlight: { tone: "region", hint: "Fill" },
+  box: { tone: "region", hint: "Outline" },
+  "triangle-up": { tone: "marker", hint: "Marker" },
+  "triangle-down": { tone: "marker", hint: "Marker" },
+  "arrow-down": { tone: "marker", hint: "Pointer" },
+  arrow: { tone: "connector", hint: "Callout" },
+  bracket: { tone: "connector", hint: "Span" },
+  circle: { tone: "marker", hint: "Marker" },
+  "open-circle": { tone: "marker", hint: "Marker" },
+  star: { tone: "marker", hint: "Marker" },
+  bridge: { tone: "connector", hint: "Link" },
+  text: { tone: "label", hint: "Label" },
+  erase: { tone: "utility", hint: "Remove" },
+};
+
 const sectionIcons: Record<keyof typeof defaultOpenSections, string> = {
   alignment: "↕",
   appearance: "◫",
   structure: "α",
   library: "✦",
   project: "↓",
+};
+
+const sectionHelp: Record<keyof typeof defaultOpenSections, string> = {
+  alignment: "Load a Clustal or aligned FASTA file, paste alignment text, then render the figure.",
+  appearance: "Choose the publication style, conservation display, and export-facing color behavior.",
+  structure: "Paste aligned top and bottom structure tracks using H, E, T, C or DSSP-like symbols.",
+  library: "Pick annotation tools, then manage layer order, locking, visibility, and duplication.",
+  project: "Adjust export presets, legend behavior, raster quality, and save or reopen project JSON.",
 };
 
 const defaultOpenSections = {
@@ -85,6 +114,33 @@ const defaultConservationColors: ConservationColorOverrides = {
   similar: "#f79009",
   weak: "#fdb022",
   neutral: "#d0d5dd",
+};
+
+const exportPresetDefaults: Record<Exclude<ExportPreset, "custom">, { printColumns: number; printSpacing: number; exportScale: number; pdfQuality: number; showLegend: boolean; boxStrokeWidth: number }> = {
+  paper: {
+    printColumns: 60,
+    printSpacing: 1,
+    exportScale: 3,
+    pdfQuality: 0.96,
+    showLegend: true,
+    boxStrokeWidth: 2.2,
+  },
+  slide: {
+    printColumns: 50,
+    printSpacing: 1.08,
+    exportScale: 4,
+    pdfQuality: 0.98,
+    showLegend: false,
+    boxStrokeWidth: 2.6,
+  },
+  poster: {
+    printColumns: 70,
+    printSpacing: 1.12,
+    exportScale: 4,
+    pdfQuality: 0.98,
+    showLegend: true,
+    boxStrokeWidth: 2.8,
+  },
 };
 
 type DragSelection = {
@@ -114,7 +170,10 @@ type ProjectState = {
   conservationColors: ConservationColorOverrides;
   espriptPreset: EspriptPreset;
   showLegend: boolean;
+  includeAutoLegend: boolean;
+  customLegendItems: CustomLegendItem[];
   boxStrokeWidth: number;
+  exportPreset: ExportPreset;
   printColumns: number;
   printSpacing: number;
   exportScale: number;
@@ -124,6 +183,7 @@ type ProjectState = {
 };
 
 export default function App() {
+  const [activePage, setActivePage] = useState<AppPage>("app");
   const [inputText, setInputText] = useState(sampleAlignment);
   const [alignment, setAlignment] = useState<AlignmentData | null>(() => parseAlignment(sampleAlignment, "Sample kinase alignment"));
   const [error, setError] = useState<string | null>(null);
@@ -140,7 +200,10 @@ export default function App() {
   const [useCustomConservationColors, setUseCustomConservationColors] = useState(false);
   const [conservationColors, setConservationColors] = useState<ConservationColorOverrides>(defaultConservationColors);
   const [showLegend, setShowLegend] = useState(true);
+  const [includeAutoLegend, setIncludeAutoLegend] = useState(true);
+  const [customLegendItems, setCustomLegendItems] = useState<CustomLegendItem[]>([]);
   const [boxStrokeWidth, setBoxStrokeWidth] = useState(2.2);
+  const [exportPreset, setExportPreset] = useState<ExportPreset>("paper");
   const [printColumns, setPrintColumns] = useState(60);
   const [printSpacing, setPrintSpacing] = useState(1);
   const [exportScale, setExportScale] = useState(2);
@@ -254,6 +317,11 @@ export default function App() {
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.key === "Delete" || event.key === "Backspace") && selectedAnnotationId) {
+        const selected = annotations.find((annotation) => annotation.id === selectedAnnotationId);
+        if (selected?.locked) {
+          setStatus("Unlock the annotation before deleting it.");
+          return;
+        }
         setAnnotations((current) => current.filter((annotation) => annotation.id !== selectedAnnotationId));
         setSelectedAnnotationId(null);
       }
@@ -278,7 +346,7 @@ export default function App() {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [dragState.active, dragState.selection, selectedAnnotationId]);
+  }, [annotations, dragState.active, dragState.selection, selectedAnnotationId]);
 
   useEffect(() => {
     if (!alignment) {
@@ -334,7 +402,9 @@ export default function App() {
     }
 
     setAnnotations((current) =>
-      current.map((annotation) => (annotation.id === selectedAnnotationId ? mutator(annotation) : annotation)),
+      current.map((annotation) =>
+        annotation.id === selectedAnnotationId ? (annotation.locked ? annotation : mutator(annotation)) : annotation,
+      ),
     );
   }
 
@@ -343,6 +413,92 @@ export default function App() {
       ...current,
       [section]: !current[section],
     }));
+  }
+
+  function markExportPresetCustom(): void {
+    setExportPreset("custom");
+  }
+
+  function applyExportPreset(preset: Exclude<ExportPreset, "custom">): void {
+    const next = exportPresetDefaults[preset];
+    setExportPreset(preset);
+    setPrintColumns(next.printColumns);
+    setPrintSpacing(next.printSpacing);
+    setExportScale(next.exportScale);
+    setPdfQuality(next.pdfQuality);
+    setShowLegend(next.showLegend);
+    setBoxStrokeWidth(next.boxStrokeWidth);
+    setStatus(`Applied ${preset} export preset.`);
+  }
+
+  function annotationDisplayName(annotation: Annotation): string {
+    return annotation.label?.trim() || annotation.type.replace("-", " ");
+  }
+
+  function addLegendItem(): void {
+    setCustomLegendItems((current) => [
+      ...current,
+      { id: makeId("legend"), label: "Custom item", color: "#7c3aed", style: "fill" },
+    ]);
+  }
+
+  function duplicateAnnotation(annotationId: string): void {
+    const source = annotations.find((item) => item.id === annotationId);
+    if (!source) {
+      return;
+    }
+    if (source.locked) {
+      setStatus("Unlock the annotation before duplicating it.");
+      return;
+    }
+
+    const duplicate: Annotation =
+      source.type === "text"
+        ? { ...source, id: makeId(source.type), dx: source.dx + 18, dy: source.dy - 10, label: `${annotationDisplayName(source)} copy` }
+        : source.type === "bridge"
+          ? { ...source, id: makeId(source.type), label: `${annotationDisplayName(source)} copy` }
+          : { ...source, id: makeId(source.type), label: `${annotationDisplayName(source)} copy` };
+
+    setAnnotations((current) => [...current, duplicate]);
+    setSelectedAnnotationId(duplicate.id);
+    setStatus(`Duplicated ${annotationDisplayName(source)}.`);
+  }
+
+  function loadExampleWorkspace(example: "espript" | "story" | "mono"): void {
+    const parsed = parseAlignment(sampleAlignment, "Sample kinase alignment");
+    const topTrack = buildSampleTrack(parsed.alignmentLength, "top");
+    const bottomTrack = buildSampleTrack(parsed.alignmentLength, "bottom");
+    setInputText(sampleAlignment);
+    setAlignment(parsed);
+    setSecondaryStructureTrack(parseSecondaryStructureTrack(`Reference structure\n${topTrack}`, parsed));
+    setBottomStructureTrack(parseSecondaryStructureTrack(`Bottom lane\n${bottomTrack}`, parsed));
+    setStructureInput(`Reference structure\n${topTrack}`);
+    setBottomStructureInput(`Bottom lane\n${bottomTrack}`);
+    setSelection(null);
+    setSelectedAnnotationId(null);
+    setPendingBridgeAnchor(null);
+    setError(null);
+
+    if (example === "espript") {
+      setVisualizationMode("espript");
+      setEspriptPreset("classic");
+      applyExportPreset("paper");
+      setAnnotations(buildDemoAnnotations("espript"));
+      setShowConservationStrip(true);
+    } else if (example === "story") {
+      setVisualizationMode("publication-flashy");
+      applyExportPreset("slide");
+      setAnnotations(buildDemoAnnotations("story"));
+      setShowConservationStrip(true);
+    } else {
+      setVisualizationMode("publication-mono");
+      applyExportPreset("poster");
+      setAnnotations(buildDemoAnnotations("mono"));
+      setShowConservationStrip(false);
+    }
+
+    setActivePage("app");
+    setStatus(`Loaded ${example} example workspace.`);
   }
 
   function openToolLibrary(): void {
@@ -438,7 +594,10 @@ export default function App() {
       useCustomConservationColors,
       conservationColors,
       showLegend,
+      includeAutoLegend,
+      customLegendItems,
       boxStrokeWidth,
+      exportPreset,
       printColumns,
       printSpacing,
       exportScale,
@@ -477,7 +636,10 @@ export default function App() {
         setUseCustomConservationColors(project.useCustomConservationColors ?? false);
         setConservationColors(project.conservationColors ?? defaultConservationColors);
         setShowLegend(project.showLegend ?? true);
+        setIncludeAutoLegend(project.includeAutoLegend ?? true);
+        setCustomLegendItems(Array.isArray(project.customLegendItems) ? project.customLegendItems : []);
         setBoxStrokeWidth(project.boxStrokeWidth ?? 2.2);
+        setExportPreset(project.exportPreset ?? "paper");
         setPrintColumns(project.printColumns ?? 60);
         setPrintSpacing(project.printSpacing ?? 1);
         setExportScale(project.exportScale ?? 2);
@@ -568,6 +730,7 @@ export default function App() {
         id: makeId("bridge"),
         type: "bridge",
         color,
+        label: "Bridge",
         from: pendingBridgeAnchor,
         to: { sequenceIndex, column },
         style: "bracket",
@@ -640,6 +803,9 @@ export default function App() {
     if (activeTool === "erase") {
       setAnnotations((current) =>
         current.filter((annotation) => {
+          if (annotation.locked) {
+            return true;
+          }
           if (!("selection" in annotation)) {
             const bridgeMinColumn = Math.min(annotation.from.column, annotation.to.column);
             const bridgeMaxColumn = Math.max(annotation.from.column, annotation.to.column);
@@ -681,6 +847,7 @@ export default function App() {
         id: makeId(activeTool),
         type: activeTool,
         color,
+        label: toolOptions.find((tool) => tool.id === activeTool)?.label,
         selection: normalized,
         ...(activeTool === "arrow" || activeTool === "bracket"
           ? { placement: "top" as const, size: 1, tailDx: 0, tailDy: 0, headDx: 0, headDy: 0 }
@@ -704,6 +871,7 @@ export default function App() {
         type: "text",
         selection: normalized,
         color,
+        label: "Text label",
         text: textValue.trim() || starterText,
         dx: 26,
         dy: -18,
@@ -726,6 +894,10 @@ export default function App() {
     }
 
     if (activeTool === "erase") {
+      if (annotation.locked) {
+        setStatus("Unlock the annotation before deleting it.");
+        return;
+      }
       setAnnotations((current) => current.filter((item) => item.id !== annotationId));
       setSelectedAnnotationId(null);
       setStatus("Deleted annotation.");
@@ -740,6 +912,9 @@ export default function App() {
     }
 
     if (annotation.type === "text") {
+      if (annotation.locked) {
+        return;
+      }
       annotationDragRef.current = {
         mode: "text",
         annotationId,
@@ -752,6 +927,9 @@ export default function App() {
     }
 
     if (annotation.type === "arrow" && (handle === "arrow-tail" || handle === "arrow-head")) {
+      if (annotation.locked) {
+        return;
+      }
       annotationDragRef.current = {
         mode: handle,
         annotationId,
@@ -787,18 +965,37 @@ export default function App() {
     <div className={focusMode ? "page-shell page-shell--focus" : "page-shell"}>
       <header className="app-header">
         <div className="header-copy">
-          <p className="eyebrow">Interactive Alignment Annotation Tool</p>
+          <p className="eyebrow">Singh Lab sequence figure tool</p>
           <h1>AlignNotate</h1>
+          <p className="lede">Interactive multiple-sequence-alignment annotation for clean, publication-ready figures.</p>
         </div>
+        <nav className="top-nav" aria-label="Primary">
+          {([
+            ["app", "App"],
+            ["examples", "Examples"],
+            ["quickstart", "Quickstart"],
+            ["contact", "Contact"],
+          ] as const).map(([page, label]) => (
+            <button
+              key={page}
+              className={activePage === page ? "top-nav-link active" : "top-nav-link"}
+              onClick={() => setActivePage(page)}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
       </header>
 
+      {activePage === "app" ? (
       <div className="app-shell">
         <aside className="left-panel">
-          <section ref={librarySectionRef} className="panel-card collapsible-card">
+          <section className="panel-card collapsible-card">
             <button className="collapse-header" type="button" onClick={() => toggleSection("alignment")}>
               <span className="collapse-title">
                 <span className="collapse-icon" aria-hidden="true">{sectionIcons.alignment}</span>
                 <span>Alignment</span>
+                <span className="help-dot" aria-label={sectionHelp.alignment} data-tip={sectionHelp.alignment} tabIndex={0}>?</span>
               </span>
               <span className="collapse-side">
                 <span className="collapse-meta">upload and parse</span>
@@ -831,11 +1028,12 @@ export default function App() {
             </div> : null}
           </section>
 
-          <section className="panel-card collapsible-card">
+          <section ref={librarySectionRef} className="panel-card collapsible-card">
             <button className="collapse-header" type="button" onClick={() => toggleSection("appearance")}>
               <span className="collapse-title">
                 <span className="collapse-icon" aria-hidden="true">{sectionIcons.appearance}</span>
                 <span>Appearance</span>
+                <span className="help-dot" aria-label={sectionHelp.appearance} data-tip={sectionHelp.appearance} tabIndex={0}>?</span>
               </span>
               <span className="collapse-side">
                 <span className="collapse-meta">view and conservation</span>
@@ -933,7 +1131,10 @@ export default function App() {
                   max="3.6"
                   step="0.2"
                   value={boxStrokeWidth}
-                  onChange={(event) => setBoxStrokeWidth(Number(event.target.value))}
+                  onChange={(event) => {
+                    markExportPresetCustom();
+                    setBoxStrokeWidth(Number(event.target.value));
+                  }}
                 />
               </label>
             </div> : null}
@@ -944,6 +1145,7 @@ export default function App() {
               <span className="collapse-title">
                 <span className="collapse-icon" aria-hidden="true">{sectionIcons.structure}</span>
                 <span>Structure</span>
+                <span className="help-dot" aria-label={sectionHelp.structure} data-tip={sectionHelp.structure} tabIndex={0}>?</span>
               </span>
               <span className="collapse-side">
                 <span className="collapse-meta">top and bottom tracks</span>
@@ -984,10 +1186,11 @@ export default function App() {
             <button className="collapse-header" type="button" onClick={() => toggleSection("library")}>
               <span className="collapse-title">
                 <span className="collapse-icon" aria-hidden="true">{sectionIcons.library}</span>
-                <span>Library</span>
+                <span>Annotation palette</span>
+                <span className="help-dot" aria-label={sectionHelp.library} data-tip={sectionHelp.library} tabIndex={0}>?</span>
               </span>
               <span className="collapse-side">
-                <span className="collapse-meta">all tools and layers</span>
+                <span className="collapse-meta">tools and layers</span>
                 <span className={openSections.library ? "collapse-caret open" : "collapse-caret"} aria-hidden="true">⌄</span>
               </span>
             </button>
@@ -998,11 +1201,13 @@ export default function App() {
                     key={tool.id}
                     className={tool.id === activeTool ? "tool-button active" : "tool-button"}
                     onClick={() => setActiveTool(tool.id)}
+                    data-tone={toolMeta[tool.id].tone}
                   >
                     <span className="tool-icon" aria-hidden="true">
                       {toolIcons[tool.id]}
                     </span>
                     <span>{tool.label}</span>
+                    <span className="tool-caption">{toolMeta[tool.id].hint}</span>
                   </button>
                 ))}
               </div>
@@ -1022,59 +1227,81 @@ export default function App() {
                           className="layer-swatch"
                           style={{ background: annotation.color }}
                           onClick={() => setSelectedAnnotationId(annotation.id)}
-                          aria-label={`Select ${annotation.type}`}
+                          aria-label={`Select ${annotationDisplayName(annotation)}`}
                         />
-                        <button className="layer-label" onClick={() => setSelectedAnnotationId(annotation.id)}>
-                          {annotation.type.replace("-", " ")}
-                        </button>
-                        <button
-                          className="layer-action"
-                          onClick={() =>
-                            setAnnotations((current) =>
-                              current.map((item) =>
-                                item.id === annotation.id ? { ...item, visible: item.visible === false ? true : false } : item,
-                              ),
-                            )
-                          }
-                        >
-                          {annotation.visible === false ? "Show" : "Hide"}
-                        </button>
-                        <button
-                          className="layer-action"
-                          disabled={index === annotations.length - 1}
-                          onClick={() =>
-                            setAnnotations((current) => {
-                              const next = [...current];
-                              const from = next.findIndex((item) => item.id === annotation.id);
-                              if (from < 0 || from === next.length - 1) {
-                                return current;
-                              }
-                              const [item] = next.splice(from, 1);
-                              next.splice(from + 1, 0, item);
-                              return next;
-                            })
-                          }
-                        >
-                          Down
-                        </button>
-                        <button
-                          className="layer-action"
-                          disabled={index === 0}
-                          onClick={() =>
-                            setAnnotations((current) => {
-                              const next = [...current];
-                              const from = next.findIndex((item) => item.id === annotation.id);
-                              if (from <= 0) {
-                                return current;
-                              }
-                              const [item] = next.splice(from, 1);
-                              next.splice(from - 1, 0, item);
-                              return next;
-                            })
-                          }
-                        >
-                          Up
-                        </button>
+                        <div className="layer-main">
+                          <button className="layer-label" onClick={() => setSelectedAnnotationId(annotation.id)}>
+                            {annotationDisplayName(annotation)}
+                          </button>
+                          <div className="layer-meta">
+                            <span>{annotation.type.replace("-", " ")}</span>
+                            {annotation.locked ? <span>locked</span> : null}
+                            {annotation.visible === false ? <span>hidden</span> : null}
+                          </div>
+                        </div>
+                        <div className="layer-actions">
+                          <button
+                            className="layer-action"
+                            onClick={() =>
+                              setAnnotations((current) =>
+                                current.map((item) =>
+                                  item.id === annotation.id ? { ...item, visible: item.visible === false ? true : false } : item,
+                                ),
+                              )
+                            }
+                          >
+                            {annotation.visible === false ? "Show" : "Hide"}
+                          </button>
+                          <button
+                            className="layer-action"
+                            onClick={() =>
+                              setAnnotations((current) =>
+                                current.map((item) => (item.id === annotation.id ? { ...item, locked: !item.locked } : item)),
+                              )
+                            }
+                          >
+                            {annotation.locked ? "Unlock" : "Lock"}
+                          </button>
+                          <button className="layer-action" onClick={() => duplicateAnnotation(annotation.id)}>
+                            Copy
+                          </button>
+                          <button
+                            className="layer-action"
+                            disabled={index === annotations.length - 1}
+                            onClick={() =>
+                              setAnnotations((current) => {
+                                const next = [...current];
+                                const from = next.findIndex((item) => item.id === annotation.id);
+                                if (from < 0 || from === next.length - 1) {
+                                  return current;
+                                }
+                                const [item] = next.splice(from, 1);
+                                next.splice(from + 1, 0, item);
+                                return next;
+                              })
+                            }
+                          >
+                            Down
+                          </button>
+                          <button
+                            className="layer-action"
+                            disabled={index === 0}
+                            onClick={() =>
+                              setAnnotations((current) => {
+                                const next = [...current];
+                                const from = next.findIndex((item) => item.id === annotation.id);
+                                if (from <= 0) {
+                                  return current;
+                                }
+                                const [item] = next.splice(from, 1);
+                                next.splice(from - 1, 0, item);
+                                return next;
+                              })
+                            }
+                          >
+                            Up
+                          </button>
+                        </div>
                       </div>
                     );
                   })
@@ -1088,6 +1315,7 @@ export default function App() {
               <span className="collapse-title">
                 <span className="collapse-icon" aria-hidden="true">{sectionIcons.project}</span>
                 <span>Project</span>
+                <span className="help-dot" aria-label={sectionHelp.project} data-tip={sectionHelp.project} tabIndex={0}>?</span>
               </span>
               <span className="collapse-side">
                 <span className="collapse-meta">export and save</span>
@@ -1095,10 +1323,111 @@ export default function App() {
               </span>
             </button>
             {openSections.project ? <div className="collapse-body">
+              <label className="field-label">
+                Export preset
+                <div className="segmented">
+                  {(["paper", "slide", "poster"] as const).map((preset) => (
+                    <button
+                      key={preset}
+                      className={exportPreset === preset ? "segment-button active" : "segment-button"}
+                      onClick={() => applyExportPreset(preset)}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+                <span className="helper-text">
+                  {exportPreset === "custom" ? "Custom export settings" : `${exportPreset} preset active`}
+                </span>
+              </label>
               <label className="toggle-row">
                 <span>Show legend</span>
-                <input type="checkbox" checked={showLegend} onChange={(event) => setShowLegend(event.target.checked)} />
+                <input
+                  type="checkbox"
+                  checked={showLegend}
+                  onChange={(event) => {
+                    markExportPresetCustom();
+                    setShowLegend(event.target.checked);
+                  }}
+                />
               </label>
+              {showLegend ? (
+                <>
+                  <label className="toggle-row">
+                    <span>Include standard legend</span>
+                    <input
+                      type="checkbox"
+                      checked={includeAutoLegend}
+                      onChange={(event) => setIncludeAutoLegend(event.target.checked)}
+                    />
+                  </label>
+                  <div className="legend-editor">
+                    <div className="section-heading">
+                      <h3>Custom legend items</h3>
+                      <button className="secondary-button" onClick={addLegendItem}>
+                        Add item
+                      </button>
+                    </div>
+                    {customLegendItems.length === 0 ? (
+                      <p className="helper-text">Add figure-specific legend rows for motifs, annotations, or custom callouts.</p>
+                    ) : (
+                      <div className="legend-list">
+                        {customLegendItems.map((item) => (
+                          <div key={item.id} className="legend-row">
+                            <input
+                              className="text-field"
+                              value={item.label}
+                              onChange={(event) =>
+                                setCustomLegendItems((current) =>
+                                  current.map((entry) =>
+                                    entry.id === item.id ? { ...entry, label: event.target.value } : entry,
+                                  ),
+                                )
+                              }
+                              placeholder="Legend label"
+                            />
+                            <select
+                              className="text-field"
+                              value={item.style}
+                              onChange={(event) =>
+                                setCustomLegendItems((current) =>
+                                  current.map((entry) =>
+                                    entry.id === item.id
+                                      ? { ...entry, style: event.target.value as CustomLegendItem["style"] }
+                                      : entry,
+                                  ),
+                                )
+                              }
+                            >
+                              <option value="fill">Fill</option>
+                              <option value="outline">Outline</option>
+                              <option value="text">Text</option>
+                            </select>
+                            <input
+                              className="toolbar-color"
+                              type="color"
+                              value={item.color}
+                              onChange={(event) =>
+                                setCustomLegendItems((current) =>
+                                  current.map((entry) =>
+                                    entry.id === item.id ? { ...entry, color: event.target.value } : entry,
+                                  ),
+                                )
+                              }
+                            />
+                            <button
+                              className="layer-action"
+                              onClick={() => setCustomLegendItems((current) => current.filter((entry) => entry.id !== item.id))}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : null}
               <label className="field-label">
                 Print columns
                 <input
@@ -1107,7 +1436,10 @@ export default function App() {
                   max="80"
                   step="5"
                   value={printColumns}
-                  onChange={(event) => setPrintColumns(Number(event.target.value))}
+                  onChange={(event) => {
+                    markExportPresetCustom();
+                    setPrintColumns(Number(event.target.value));
+                  }}
                 />
                 <span className="helper-text">{printColumns} residues per row</span>
               </label>
@@ -1119,7 +1451,10 @@ export default function App() {
                   max="1.2"
                   step="0.05"
                   value={printSpacing}
-                  onChange={(event) => setPrintSpacing(Number(event.target.value))}
+                  onChange={(event) => {
+                    markExportPresetCustom();
+                    setPrintSpacing(Number(event.target.value));
+                  }}
                 />
                 <span className="helper-text">{printSpacing.toFixed(2)}x spacing</span>
               </label>
@@ -1131,7 +1466,10 @@ export default function App() {
                   max="4"
                   step="1"
                   value={exportScale}
-                  onChange={(event) => setExportScale(Number(event.target.value))}
+                  onChange={(event) => {
+                    markExportPresetCustom();
+                    setExportScale(Number(event.target.value));
+                  }}
                 />
                 <span className="helper-text">{exportScale}x PNG/PDF resolution</span>
               </label>
@@ -1143,7 +1481,10 @@ export default function App() {
                   max="1"
                   step="0.05"
                   value={pdfQuality}
-                  onChange={(event) => setPdfQuality(Number(event.target.value))}
+                  onChange={(event) => {
+                    markExportPresetCustom();
+                    setPdfQuality(Number(event.target.value));
+                  }}
                 />
                 <span className="helper-text">{Math.round(pdfQuality * 100)}% JPEG quality in PDF</span>
               </label>
@@ -1161,62 +1502,77 @@ export default function App() {
         </aside>
 
         <main className="canvas-panel">
-          <div className="workspace-toolbar">
-            <div className="toolbar-group toolbar-group--grow">
-              <span className="toolbar-label">Tools</span>
-              <div className="toolbar-tools">
-                {quickToolOptions.map((tool) => (
-                  <button
-                    key={tool.id}
-                    className={tool.id === activeTool ? "toolbar-chip active" : "toolbar-chip"}
-                    onClick={() => setActiveTool(tool.id)}
-                  >
-                    <span className="toolbar-chip-icon" aria-hidden="true">
-                      {toolIcons[tool.id]}
-                    </span>
-                    <span>{tool.label}</span>
+          <div className="toolbar-stack">
+            <div className="workspace-toolbar">
+              <div className="toolbar-panel toolbar-panel--tools">
+                <div className="toolbar-panel-head">
+                  <span className="toolbar-label">Quick tools <span className="help-dot help-dot--inline" aria-label="Fast access to the most-used annotation tools." data-tip="Fast access to the most-used annotation tools." tabIndex={0}>?</span></span>
+                  <span className="toolbar-panel-note">Click to annotate</span>
+                </div>
+                <div className="toolbar-tools">
+                  {quickToolOptions.map((tool) => (
+                    <button
+                      key={tool.id}
+                      className={tool.id === activeTool ? "toolbar-chip active" : "toolbar-chip"}
+                      onClick={() => setActiveTool(tool.id)}
+                      data-tone={toolMeta[tool.id].tone}
+                    >
+                      <span className="toolbar-chip-icon" aria-hidden="true">
+                        {toolIcons[tool.id]}
+                      </span>
+                      <span>{tool.label}</span>
+                    </button>
+                  ))}
+                  <button className={showToolTray ? "toolbar-chip active" : "toolbar-chip"} onClick={openToolLibrary}>
+                    <span className="toolbar-chip-icon" aria-hidden="true">‹</span>
+                    <span>More tools</span>
                   </button>
-                ))}
-                <button className={showToolTray ? "toolbar-chip active" : "toolbar-chip"} onClick={openToolLibrary}>
-                  <span className="toolbar-chip-icon" aria-hidden="true">‹</span>
-                  <span>More tools</span>
-                </button>
+                </div>
               </div>
-            </div>
-            <div className="toolbar-group">
-              <span className="toolbar-label">Color</span>
-              <input
-                className="toolbar-color"
-                type="color"
-                value={color}
-                onChange={(event) => {
-                  const nextColor = event.target.value;
-                  setColor(nextColor);
-                  updateSelectedAnnotation((annotation) => ({ ...annotation, color: nextColor }));
-                }}
-              />
-            </div>
-            <label className="toolbar-toggle">
-              <span>Print preview</span>
-              <input type="checkbox" checked={previewExport} onChange={(event) => setPreviewExport(event.target.checked)} />
-            </label>
-            <div className="toolbar-actions">
-              <button className={focusMode ? "secondary-button active-toggle" : "secondary-button"} onClick={() => setFocusMode((current) => !current)}>
-                <span className="toolbar-chip-icon" aria-hidden="true">{focusMode ? "⤢" : "⛶"}</span>
-                {focusMode ? "Exit focus" : "Focus"}
-              </button>
-              <button className="primary-button" onClick={() => handleExport("svg")}>
-                <span className="toolbar-chip-icon" aria-hidden="true">⌘</span>
-                SVG
-              </button>
-              <button className="secondary-button" onClick={() => handleExport("png")}>
-                <span className="toolbar-chip-icon" aria-hidden="true">▣</span>
-                PNG
-              </button>
-              <button className="secondary-button" onClick={() => handleExport("pdf")}>
-                <span className="toolbar-chip-icon" aria-hidden="true">▤</span>
-                PDF
-              </button>
+
+              <div className="toolbar-panel toolbar-panel--export">
+                <div className="toolbar-panel-head">
+                  <span className="toolbar-label">Save options <span className="help-dot help-dot--inline" aria-label="Preview the export, set annotation color, and export SVG, PNG, or PDF." data-tip="Preview the export, set annotation color, and export SVG, PNG, or PDF." tabIndex={0}>?</span></span>
+                  <span className="toolbar-panel-note">Click to save</span>
+                </div>
+                <div className="toolbar-save-row">
+                  <div className="toolbar-group">
+                    <span className="toolbar-label">Color <span className="help-dot help-dot--inline" aria-label="Sets the color for newly created annotations and the selected annotation." data-tip="Sets the color for newly created annotations and the selected annotation." tabIndex={0}>?</span></span>
+                    <input
+                      className="toolbar-color"
+                      type="color"
+                      value={color}
+                      onChange={(event) => {
+                        const nextColor = event.target.value;
+                        setColor(nextColor);
+                        updateSelectedAnnotation((annotation) => ({ ...annotation, color: nextColor }));
+                      }}
+                    />
+                  </div>
+                  <label className="toolbar-toggle">
+                    <span>Print preview</span>
+                    <input type="checkbox" checked={previewExport} onChange={(event) => setPreviewExport(event.target.checked)} />
+                  </label>
+                  <button className={focusMode ? "secondary-button active-toggle" : "secondary-button"} onClick={() => setFocusMode((current) => !current)}>
+                    <span className="toolbar-chip-icon" aria-hidden="true">{focusMode ? "⤢" : "⛶"}</span>
+                    {focusMode ? "Exit focus" : "Focus"}
+                  </button>
+                </div>
+                <div className="toolbar-actions">
+                  <button className="primary-button" onClick={() => handleExport("svg")}>
+                    <span className="toolbar-chip-icon" aria-hidden="true">⌘</span>
+                    SVG
+                  </button>
+                  <button className="secondary-button" onClick={() => handleExport("png")}>
+                    <span className="toolbar-chip-icon" aria-hidden="true">▣</span>
+                    PNG
+                  </button>
+                  <button className="secondary-button" onClick={() => handleExport("pdf")}>
+                    <span className="toolbar-chip-icon" aria-hidden="true">▤</span>
+                    PDF
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1237,11 +1593,13 @@ export default function App() {
                       setActiveTool(tool.id);
                       setShowToolTray(false);
                     }}
+                    data-tone={toolMeta[tool.id].tone}
                   >
                     <span className="tool-icon" aria-hidden="true">
                       {toolIcons[tool.id]}
                     </span>
                     <span>{tool.label}</span>
+                    <span className="tool-caption">{toolMeta[tool.id].hint}</span>
                   </button>
                 ))}
               </div>
@@ -1263,7 +1621,35 @@ export default function App() {
               <h2>Selection</h2>
               <span className="inspector-tag">{selectedAnnotation.type.replace("-", " ")}</span>
             </div>
+            <div className="inspector-actions">
+              <button className="secondary-button" onClick={() => duplicateAnnotation(selectedAnnotation.id)}>
+                Duplicate
+              </button>
+              <button
+                className={selectedAnnotation.locked ? "secondary-button active-toggle" : "secondary-button"}
+                onClick={() =>
+                  setAnnotations((current) =>
+                    current.map((annotation) =>
+                      annotation.id === selectedAnnotation.id ? { ...annotation, locked: !annotation.locked } : annotation,
+                    ),
+                  )
+                }
+              >
+                {selectedAnnotation.locked ? "Locked" : "Lock"}
+              </button>
+            </div>
             <div className="inspector-grid">
+              <label className="field-label">
+                Name
+                <input
+                  className="text-field"
+                  value={selectedAnnotation.label ?? ""}
+                  onChange={(event) => {
+                    const nextLabel = event.target.value;
+                    updateSelectedAnnotation((annotation) => ({ ...annotation, label: nextLabel }));
+                  }}
+                />
+              </label>
               <label className="field-label">
                 Color
                 <input
@@ -1424,6 +1810,8 @@ export default function App() {
               conservationColors={useCustomConservationColors ? conservationColors : null}
               showConservationStrip={showConservationStrip}
               showLegend={showLegend}
+              includeAutoLegend={includeAutoLegend}
+              customLegendItems={customLegendItems}
               secondaryStructureTrack={secondaryStructureTrack}
               bottomStructureTrack={bottomStructureTrack}
               boxStrokeWidth={boxStrokeWidth}
@@ -1451,6 +1839,139 @@ export default function App() {
         ) : null}
         </main>
       </div>
+      ) : (
+        <main className="info-shell">
+          {activePage === "examples" ? (
+            <section className="panel-card info-card-stack">
+              <div className="section-heading">
+                <div>
+                  <h2>Examples gallery</h2>
+                  <p className="helper-text">Load a prepared workspace and jump back into the editor with sensible presets, structure lanes, and example markup.</p>
+                </div>
+              </div>
+              <div className="examples-grid">
+                <article className="example-card">
+                  <div className="example-preview example-preview--espript" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <h3>ESPript-style paper panel</h3>
+                  <p className="helper-text">Classic conservation styling, visible legend, structure lanes, and compact manuscript-oriented spacing.</p>
+                  <div className="example-tags">
+                    <span className="example-tag">ESPript Classic</span>
+                    <span className="example-tag">Paper preset</span>
+                  </div>
+                  <button className="primary-button" onClick={() => loadExampleWorkspace("espript")}>
+                    Load in app
+                  </button>
+                </article>
+                <article className="example-card">
+                  <div className="example-preview example-preview--story" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <h3>Talk / lab meeting figure</h3>
+                  <p className="helper-text">Flashier view mode, bigger export preset, and clear callout-style annotations for presentations.</p>
+                  <div className="example-tags">
+                    <span className="example-tag">Flashy</span>
+                    <span className="example-tag">Slide preset</span>
+                  </div>
+                  <button className="primary-button" onClick={() => loadExampleWorkspace("story")}>
+                    Load in app
+                  </button>
+                </article>
+                <article className="example-card">
+                  <div className="example-preview example-preview--mono" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <h3>Minimal poster panel</h3>
+                  <p className="helper-text">Monochrome alignment with annotations preserved and a wider column layout for posters or supplementary figures.</p>
+                  <div className="example-tags">
+                    <span className="example-tag">Mono</span>
+                    <span className="example-tag">Poster preset</span>
+                  </div>
+                  <button className="primary-button" onClick={() => loadExampleWorkspace("mono")}>
+                    Load in app
+                  </button>
+                </article>
+              </div>
+            </section>
+          ) : null}
+
+          {activePage === "quickstart" ? (
+            <section className="panel-card info-card-stack">
+              <div className="section-heading">
+                <div>
+                  <h2>Docs and quickstart</h2>
+                  <p className="helper-text">Everything you need to go from raw alignment to finished figure quickly.</p>
+                </div>
+              </div>
+              <div className="docs-grid">
+                <article className="doc-card">
+                  <h3>1. Load an alignment</h3>
+                  <p className="helper-text">Upload a Clustal `.aln` file or paste alignment text. FASTA-aligned sequences also work when formatted consistently.</p>
+                </article>
+                <article className="doc-card">
+                  <h3>2. Choose a view mode</h3>
+                  <p className="helper-text">Use `ESPript`, `Classic`, `Flashy`, `Mono`, `Chemistry`, or `Residue`, then tune conservation colors if needed.</p>
+                </article>
+                <article className="doc-card">
+                  <h3>3. Annotate directly</h3>
+                  <p className="helper-text">Drag to highlight or box, click to place markers, click twice for a bridge, and drag text labels or arrow endpoints.</p>
+                </article>
+                <article className="doc-card">
+                  <h3>4. Add structure tracks</h3>
+                  <p className="helper-text">Paste aligned H/E/T/C or DSSP-like tracks into the top or bottom lane to render helices, strands, and turns.</p>
+                </article>
+                <article className="doc-card">
+                  <h3>5. Use export presets</h3>
+                  <p className="helper-text">`Paper`, `Slide`, and `Poster` presets set spacing, scale, legend, and line weight before SVG/PNG/PDF export.</p>
+                </article>
+                <article className="doc-card">
+                  <h3>6. Save project state</h3>
+                  <p className="helper-text">Project JSON preserves alignment text, annotations, export settings, and structure tracks so figures can be reopened later.</p>
+                </article>
+              </div>
+              <div className="code-note">
+                <strong>Supported inputs:</strong> Clustal `.aln`, pasted alignment text, aligned FASTA.
+              </div>
+            </section>
+          ) : null}
+
+          {activePage === "contact" ? (
+            <section className="panel-card info-card-stack contact-card">
+              <div>
+                <h2>Contact</h2>
+                <p className="helper-text">AlignNotate is intended as one tool within a larger Singh Lab web presence, with the editor kept focused on figure production.</p>
+              </div>
+              <div className="contact-grid">
+                <div>
+                  <h3>Email</h3>
+                  <a className="contact-link" href="mailto:mubasshirm22@gmail.com">mubasshirm22@gmail.com</a>
+                </div>
+                <div>
+                  <h3>GitHub</h3>
+                  <a className="contact-link" href="https://github.com/mubasshirm22/alignnotate" target="_blank" rel="noreferrer">
+                    github.com/mubasshirm22/alignnotate
+                  </a>
+                </div>
+                <div>
+                  <h3>Use case</h3>
+                  <p className="helper-text">Protein multiple-sequence-alignment figure preparation for papers, posters, lab meetings, and talks.</p>
+                </div>
+                <div>
+                  <h3>Feedback</h3>
+                  <p className="helper-text">Feature requests, parser edge cases, and annotation/export bugs are all useful to collect as the tool matures.</p>
+                </div>
+              </div>
+            </section>
+          ) : null}
+        </main>
+      )}
 
       {alignment ? (
         <div className="export-stage" aria-hidden="true">
@@ -1465,6 +1986,8 @@ export default function App() {
             conservationColors={useCustomConservationColors ? conservationColors : null}
             showConservationStrip={showConservationStrip}
             showLegend={showLegend}
+            includeAutoLegend={includeAutoLegend}
+            customLegendItems={customLegendItems}
             secondaryStructureTrack={secondaryStructureTrack}
             bottomStructureTrack={bottomStructureTrack}
             boxStrokeWidth={boxStrokeWidth}
@@ -1486,4 +2009,118 @@ export default function App() {
 
 function snapDragOffset(value: number, step: number): number {
   return Math.round(value / step) * step;
+}
+
+function buildSampleTrack(length: number, lane: "top" | "bottom"): string {
+  return Array.from({ length }, (_, index) => {
+    if (lane === "top") {
+      if (index >= 6 && index <= 22) return "H";
+      if (index >= 34 && index <= 41) return "E";
+      if (index >= 52 && index <= 56) return "T";
+      if (index >= 68 && index <= 82) return "H";
+      if (index >= 96 && index <= 103) return "E";
+      return "C";
+    }
+
+    if (index >= 10 && index <= 18) return "E";
+    if (index >= 28 && index <= 36) return "H";
+    if (index >= 58 && index <= 63) return "T";
+    if (index >= 90 && index <= 98) return "E";
+    return "C";
+  }).join("");
+}
+
+function buildDemoAnnotations(kind: "espript" | "story" | "mono"): Annotation[] {
+  if (kind === "espript") {
+    return [
+      {
+        id: "demo-highlight-1",
+        type: "highlight",
+        label: "Catalytic patch",
+        color: "#7c3aed",
+        selection: { startSequence: 0, endSequence: 3, startColumn: 12, endColumn: 16 },
+      },
+      {
+        id: "demo-bridge-1",
+        type: "bridge",
+        label: "Bridge",
+        color: "#2563eb",
+        from: { sequenceIndex: 0, column: 36 },
+        to: { sequenceIndex: 0, column: 42 },
+        style: "bracket",
+        placement: "top",
+        height: 1.2,
+      },
+      {
+        id: "demo-text-1",
+        type: "text",
+        label: "Motif label",
+        color: "#0f172a",
+        selection: { startSequence: 0, endSequence: 0, startColumn: 48, endColumn: 48 },
+        text: "Motif A",
+        dx: 18,
+        dy: -20,
+      },
+    ];
+  }
+
+  if (kind === "story") {
+    return [
+      {
+        id: "demo-box-1",
+        type: "box",
+        label: "Variable loop",
+        color: "#16a34a",
+        selection: { startSequence: 0, endSequence: 3, startColumn: 66, endColumn: 74 },
+      },
+      {
+        id: "demo-arrow-1",
+        type: "arrow",
+        label: "Callout",
+        color: "#dc2626",
+        selection: { startSequence: 1, endSequence: 1, startColumn: 88, endColumn: 94 },
+        placement: "top",
+        size: 1.1,
+        tailDx: 0,
+        tailDy: 0,
+        headDx: 0,
+        headDy: 0,
+      },
+      {
+        id: "demo-text-2",
+        type: "text",
+        label: "Talk label",
+        color: "#111827",
+        selection: { startSequence: 1, endSequence: 1, startColumn: 93, endColumn: 93 },
+        text: "Helix cap",
+        dx: 24,
+        dy: -18,
+      },
+    ];
+  }
+
+  return [
+    {
+      id: "demo-bracket-1",
+      type: "bracket",
+      label: "Domain span",
+      color: "#1d4ed8",
+      selection: { startSequence: 0, endSequence: 0, startColumn: 24, endColumn: 44 },
+      placement: "top",
+      size: 1,
+      tailDx: 0,
+      tailDy: 0,
+      headDx: 0,
+      headDy: 0,
+    },
+    {
+      id: "demo-circle-1",
+      type: "open-circle",
+      label: "Site marker",
+      color: "#b45309",
+      selection: { startSequence: 2, endSequence: 2, startColumn: 82, endColumn: 82 },
+      placement: "top",
+      size: 1,
+    },
+  ];
 }

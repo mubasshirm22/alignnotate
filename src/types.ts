@@ -38,6 +38,8 @@ export type Selection = {
 export type AnnotationBase = {
   id: string;
   color: string;
+  label?: string;
+  locked?: boolean;
   visible?: boolean;
 };
 
@@ -112,6 +114,13 @@ export type ConservationColorOverrides = {
   similar: string;
   weak: string;
   neutral: string;
+};
+
+export type CustomLegendItem = {
+  id: string;
+  label: string;
+  color: string;
+  style: "fill" | "outline" | "text";
 };
 
 export type SecondaryStructureTrack = {
