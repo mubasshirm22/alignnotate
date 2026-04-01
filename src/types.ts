@@ -19,6 +19,7 @@ export type Tool =
   | "triangle-up"
   | "triangle-down"
   | "arrow-down"
+  | "span-arrow"
   | "arrow"
   | "bracket"
   | "circle"
@@ -49,7 +50,7 @@ export type RegionAnnotation = AnnotationBase & {
 };
 
 export type MarkerAnnotation = AnnotationBase & {
-  type: "triangle-up" | "triangle-down" | "arrow-down" | "circle" | "open-circle" | "star" | "arrow" | "bracket";
+  type: "triangle-up" | "triangle-down" | "arrow-down" | "span-arrow" | "circle" | "open-circle" | "star" | "arrow" | "bracket";
   selection: Selection;
   size?: number;
   placement?: "top" | "bottom";
@@ -74,6 +75,8 @@ export type TextAnnotation = AnnotationBase & {
   text: string;
   dx: number;
   dy: number;
+  boxed?: boolean;
+  connector?: boolean;
 };
 
 export type Annotation = RegionAnnotation | MarkerAnnotation | TextAnnotation | BridgeAnnotation;

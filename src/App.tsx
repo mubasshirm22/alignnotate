@@ -23,7 +23,7 @@ import type {
 
 type AppPage = "app" | "examples" | "quickstart" | "contact";
 type ExportPreset = "paper" | "slide" | "poster" | "custom";
-type WorkspaceStep = "setup" | "style" | "annotate" | "export";
+type WorkspaceStep = "setup" | "workspace" | "export";
 
 const toolOptions: { id: Tool; label: string }[] = [
   { id: "select", label: "Select" },
@@ -32,6 +32,7 @@ const toolOptions: { id: Tool; label: string }[] = [
   { id: "triangle-up", label: "Triangle Up" },
   { id: "triangle-down", label: "Triangle Down" },
   { id: "arrow-down", label: "Arrow Down" },
+  { id: "span-arrow", label: "Span Arrow" },
   { id: "arrow", label: "Arrow" },
   { id: "bracket", label: "Bracket" },
   { id: "circle", label: "Circle" },
@@ -46,6 +47,7 @@ const quickToolOptions: { id: Tool; label: string }[] = [
   { id: "highlight", label: "Highlight" },
   { id: "box", label: "Box" },
   { id: "text", label: "Text" },
+  { id: "span-arrow", label: "Span Arrow" },
   { id: "arrow", label: "Arrow" },
   { id: "bridge", label: "Bridge" },
   { id: "bracket", label: "Bracket" },
@@ -59,6 +61,7 @@ const toolIcons: Record<Tool, string> = {
   "triangle-up": "▲",
   "triangle-down": "▼",
   "arrow-down": "↓",
+  "span-arrow": "↦",
   arrow: "→",
   bracket: "⟦",
   circle: "●",
@@ -76,6 +79,7 @@ const toolMeta: Record<Tool, { tone: "region" | "marker" | "connector" | "label"
   "triangle-up": { tone: "marker", hint: "Marker" },
   "triangle-down": { tone: "marker", hint: "Marker" },
   "arrow-down": { tone: "marker", hint: "Pointer" },
+  "span-arrow": { tone: "connector", hint: "Region" },
   arrow: { tone: "connector", hint: "Callout" },
   bracket: { tone: "connector", hint: "Span" },
   circle: { tone: "marker", hint: "Marker" },
@@ -95,10 +99,9 @@ const sectionHelp = {
 };
 
 const workflowSteps: { id: WorkspaceStep; label: string; description: string }[] = [
-  { id: "setup", label: "1. Setup", description: "Upload or paste alignment data" },
-  { id: "style", label: "2. Style", description: "Pick view mode and structure tracks" },
-  { id: "annotate", label: "3. Annotate", description: "Add labels, markers, regions, and layers" },
-  { id: "export", label: "4. Export", description: "Preview, save, and reopen figures" },
+  { id: "setup", label: "1. Start", description: "Upload an alignment or open an example" },
+  { id: "workspace", label: "2. Workspace", description: "Style the figure and annotate directly" },
+  { id: "export", label: "3. Export", description: "Preview, save, and reopen figures" },
 ];
 
 const starterText = "Active-site loop";
@@ -212,7 +215,8 @@ export default function App() {
   const [previewExport, setPreviewExport] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [showToolTray, setShowToolTray] = useState(false);
-  const [status, setStatus] = useState("Load an alignment, drag over residues, and annotate directly on the figure.");
+  const [showPasteComposer, setShowPasteComposer] = useState(false);
+  const [status, setStatus] = useState("Upload an alignment or open an example, then annotate directly on the figure.");
   const editorSvgRef = useRef<SVGSVGElement | null>(null);
   const exportSvgRef = useRef<SVGSVGElement | null>(null);
   const annotationDragRef = useRef<AnnotationDrag | null>(null);
@@ -300,6 +304,15 @@ export default function App() {
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return;
+      }
+
       if ((event.key === "Delete" || event.key === "Backspace") && selectedAnnotationId) {
         const selected = annotations.find((annotation) => annotation.id === selectedAnnotationId);
         if (selected?.locked) {
@@ -468,12 +481,13 @@ export default function App() {
     }
 
     setActivePage("app");
-    setWorkspaceStep("annotate");
+    setWorkspaceStep("workspace");
+    setShowPasteComposer(true);
     setStatus(`Loaded ${example} example workspace.`);
   }
 
   function openToolLibrary(): void {
-    setWorkspaceStep("annotate");
+    setWorkspaceStep("workspace");
     setShowToolTray((current) => !current);
   }
 
@@ -494,10 +508,11 @@ export default function App() {
       try {
         setBottomStructureTrack(parseSecondaryStructureTrack(bottomStructureInput, parsed));
       } catch {
-        setBottomStructureTrack(null);
-      }
-      setWorkspaceStep("style");
-      setStatus(`Loaded ${parsed.sequences.length} sequences across ${parsed.alignmentLength} alignment columns.`);
+      setBottomStructureTrack(null);
+    }
+    setWorkspaceStep("workspace");
+    setShowPasteComposer(true);
+    setStatus(`Loaded ${parsed.sequences.length} sequences across ${parsed.alignmentLength} alignment columns.`);
     } catch (parseError) {
       const message = parseError instanceof Error ? parseError.message : "Could not parse alignment.";
       setError(message);
@@ -531,7 +546,8 @@ export default function App() {
         } catch {
           setBottomStructureTrack(null);
         }
-        setWorkspaceStep("style");
+        setWorkspaceStep("workspace");
+        setShowPasteComposer(true);
         setStatus(`Loaded ${file.name} with ${parsed.sequences.length} sequences.`);
       } catch (parseError) {
         const message = parseError instanceof Error ? parseError.message : "Could not parse alignment.";
@@ -619,7 +635,8 @@ export default function App() {
         setSelectedAnnotationId(null);
         setPendingBridgeAnchor(null);
         setError(null);
-        setWorkspaceStep("annotate");
+        setWorkspaceStep("workspace");
+        setShowPasteComposer(true);
         setStatus(`Loaded project ${file.name}.`);
       } catch (loadError) {
         const message = loadError instanceof Error ? loadError.message : "Could not load project.";
@@ -807,6 +824,7 @@ export default function App() {
       activeTool === "triangle-up" ||
       activeTool === "triangle-down" ||
       activeTool === "arrow-down" ||
+      activeTool === "span-arrow" ||
       activeTool === "arrow" ||
       activeTool === "bracket" ||
       activeTool === "circle" ||
@@ -819,8 +837,8 @@ export default function App() {
         color,
         label: toolOptions.find((tool) => tool.id === activeTool)?.label,
         selection: normalized,
-        ...(activeTool === "arrow" || activeTool === "bracket"
-          ? { placement: "top" as const, size: 1, tailDx: 0, tailDy: 0, headDx: 0, headDy: 0 }
+        ...(activeTool === "arrow" || activeTool === "bracket" || activeTool === "span-arrow"
+          ? { placement: activeTool === "span-arrow" ? ("bottom" as const) : ("top" as const), size: 1, tailDx: 0, tailDy: 0, headDx: 0, headDy: 0 }
           : activeTool === "triangle-up" ||
               activeTool === "triangle-down" ||
               activeTool === "arrow-down" ||
@@ -845,6 +863,8 @@ export default function App() {
         text: textValue.trim() || starterText,
         dx: 26,
         dy: -18,
+        boxed: true,
+        connector: true,
       };
       setAnnotations((current) => [...current, annotation]);
       setSelectedAnnotationId(annotation.id);
@@ -987,34 +1007,41 @@ export default function App() {
               <section className="panel-card workspace-card">
                 <div className="workspace-card-head">
                   <div>
-                    <h2>Load alignment</h2>
-                    <p className="helper-text">Start with a Clustal `.aln`, aligned FASTA, or pasted alignment text.</p>
+                    <h2>Start a figure</h2>
+                    <p className="helper-text">Choose one path to begin. The sample alignment stays visible on the canvas so you can immediately see how the editor works.</p>
                   </div>
                   <span className="help-dot" aria-label={sectionHelp.alignment} data-tip={sectionHelp.alignment} tabIndex={0}>?</span>
                 </div>
-                <div className="inline-actions">
+                <div className="start-grid">
                   <label className="file-button">
-                    Upload alignment
+                    Upload `.aln` / FASTA
                     <input type="file" accept=".aln,.aln-clustal_num,.clustal,.txt,.fa,.fasta,.fas" onChange={handleFileUpload} />
                   </label>
-                  <button className="secondary-button" onClick={() => setInputText(sampleAlignment)}>
-                    Load sample text
+                  <button className="secondary-button" onClick={() => loadExampleWorkspace("espript")}>
+                    Open sample workspace
+                  </button>
+                  <button className="secondary-button" onClick={() => setShowPasteComposer((current) => !current)}>
+                    {showPasteComposer ? "Hide pasted text" : "Paste alignment text"}
                   </button>
                 </div>
-                <textarea
-                  className="alignment-input"
-                  value={inputText}
-                  onChange={(event) => setInputText(event.target.value)}
-                  spellCheck={false}
-                />
-                <div className="inline-actions">
-                  <button className="primary-button" onClick={loadAlignment}>
-                    Render alignment
-                  </button>
-                  <button className="secondary-button" onClick={() => setWorkspaceStep("style")}>
-                    Continue to style
-                  </button>
-                </div>
+                {showPasteComposer ? (
+                  <>
+                    <textarea
+                      className="alignment-input"
+                      value={inputText}
+                      onChange={(event) => setInputText(event.target.value)}
+                      spellCheck={false}
+                    />
+                    <div className="inline-actions">
+                      <button className="primary-button" onClick={loadAlignment}>
+                        Render pasted alignment
+                      </button>
+                      <button className="secondary-button" onClick={() => setInputText(sampleAlignment)}>
+                        Use sample text
+                      </button>
+                    </div>
+                  </>
+                ) : null}
                 {error ? <p className="error-text">{error}</p> : null}
               </section>
 
@@ -1044,7 +1071,7 @@ export default function App() {
             </>
           ) : null}
 
-          {workspaceStep === "style" ? (
+          {workspaceStep === "workspace" ? (
             <>
               <section className="panel-card workspace-card">
                 <div className="workspace-card-head">
@@ -1202,16 +1229,12 @@ export default function App() {
                   spellCheck={false}
                 />
                 <div className="inline-actions">
-                  <button className="secondary-button" onClick={() => setWorkspaceStep("annotate")}>
-                    Continue to annotate
+                  <button className="secondary-button" onClick={() => setStatus("Structure tracks updated for the current workspace.")}>
+                    Keep these tracks
                   </button>
                 </div>
               </section>
-            </>
-          ) : null}
 
-          {workspaceStep === "annotate" ? (
-            <>
               <section className="panel-card workspace-card">
                 <div className="workspace-card-head">
                   <div>
@@ -1358,6 +1381,7 @@ export default function App() {
                     (selectedAnnotation.type === "triangle-up" ||
                       selectedAnnotation.type === "triangle-down" ||
                       selectedAnnotation.type === "arrow-down" ||
+                      selectedAnnotation.type === "span-arrow" ||
                       selectedAnnotation.type === "circle" ||
                       selectedAnnotation.type === "open-circle" ||
                       selectedAnnotation.type === "star" ||
@@ -1378,6 +1402,7 @@ export default function App() {
                               (annotation.type === "triangle-up" ||
                                 annotation.type === "triangle-down" ||
                                 annotation.type === "arrow-down" ||
+                                annotation.type === "span-arrow" ||
                                 annotation.type === "circle" ||
                                 annotation.type === "open-circle" ||
                                 annotation.type === "star" ||
@@ -1393,7 +1418,8 @@ export default function App() {
                     {"selection" in selectedAnnotation &&
                     (selectedAnnotation.type === "arrow" ||
                       selectedAnnotation.type === "bracket" ||
-                      selectedAnnotation.type === "arrow-down") ? (
+                      selectedAnnotation.type === "arrow-down" ||
+                      selectedAnnotation.type === "span-arrow") ? (
                       <label className="field-label">
                         Placement
                         <select
@@ -1403,7 +1429,7 @@ export default function App() {
                             const placement = event.target.value as "top" | "bottom";
                             updateSelectedAnnotation((annotation) =>
                               "selection" in annotation &&
-                              (annotation.type === "arrow" || annotation.type === "bracket" || annotation.type === "arrow-down")
+                              (annotation.type === "arrow" || annotation.type === "bracket" || annotation.type === "arrow-down" || annotation.type === "span-arrow")
                                 ? { ...annotation, placement }
                                 : annotation,
                             );
@@ -1412,6 +1438,34 @@ export default function App() {
                           <option value="top">Top</option>
                           <option value="bottom">Bottom</option>
                         </select>
+                      </label>
+                    ) : null}
+                    {selectedAnnotation.type === "text" ? (
+                      <label className="toggle-row inspector-toggle">
+                        <span>Show text box</span>
+                        <input
+                          type="checkbox"
+                          checked={selectedAnnotation.boxed ?? true}
+                          onChange={(event) =>
+                            updateSelectedAnnotation((annotation) =>
+                              annotation.type === "text" ? { ...annotation, boxed: event.target.checked } : annotation,
+                            )
+                          }
+                        />
+                      </label>
+                    ) : null}
+                    {selectedAnnotation.type === "text" ? (
+                      <label className="toggle-row inspector-toggle">
+                        <span>Show connector line</span>
+                        <input
+                          type="checkbox"
+                          checked={selectedAnnotation.connector ?? true}
+                          onChange={(event) =>
+                            updateSelectedAnnotation((annotation) =>
+                              annotation.type === "text" ? { ...annotation, connector: event.target.checked } : annotation,
+                            )
+                          }
+                        />
                       </label>
                     ) : null}
                     {selectedAnnotation.type === "bridge" ? (

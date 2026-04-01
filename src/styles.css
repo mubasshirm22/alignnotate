@@ -228,6 +228,26 @@ textarea {
   flex-wrap: wrap;
 }
 
+.start-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.start-grid .file-button,
+.start-grid .secondary-button {
+  justify-content: center;
+  min-height: 48px;
+}
+
+.inspector-toggle {
+  margin-top: 0;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(98, 123, 161, 0.14);
+  background: rgba(255, 255, 255, 0.82);
+}
+
 .palette-color-field {
   min-width: 118px;
   padding: 12px 14px;

@@ -712,6 +712,7 @@ function renderAnnotation(
       annotation.type === "triangle-up" ||
       annotation.type === "triangle-down" ||
       annotation.type === "arrow-down" ||
+      annotation.type === "span-arrow" ||
       annotation.type === "arrow" ||
       annotation.type === "bracket" ||
       annotation.type === "circle" ||
@@ -774,6 +775,33 @@ function renderAnnotation(
               fill={annotation.color}
               stroke={stroke}
               strokeWidth={0.9 * markerScale}
+            />
+          </g>,
+        );
+      }
+
+      if (annotation.type === "span-arrow") {
+        const arrowY = placement === "top" ? anchorY - 2 : anchorY + 2;
+        const headSize = 8 * markerScale;
+        const lineEndX = Math.max(spanStartX + 8, spanEndX - headSize - 1);
+        elements.push(
+          <g
+            key={`${annotation.id}_${block.blockIndex}`}
+            data-annotation-id={annotation.id}
+            onPointerDown={(event) => onAnnotationPointerDown(annotation.id, event.clientX, event.clientY, "body")}
+          >
+            <line
+              x1={spanStartX}
+              y1={arrowY}
+              x2={lineEndX}
+              y2={arrowY}
+              stroke={annotation.color}
+              strokeWidth={2.2 * markerScale}
+              strokeLinecap="round"
+            />
+            <polygon
+              points={`${spanEndX},${arrowY} ${spanEndX - headSize},${arrowY - 5 * markerScale} ${spanEndX - headSize},${arrowY + 5 * markerScale}`}
+              fill={annotation.color}
             />
           </g>,
         );
@@ -888,17 +916,21 @@ function renderAnnotation(
           data-annotation-id={annotation.id}
           onPointerDown={(event) => onAnnotationPointerDown(annotation.id, event.clientX, event.clientY)}
         >
-          <line x1={anchorX} y1={anchorY} x2={labelX} y2={labelY - 10} stroke={annotation.color} strokeWidth={1.1} />
-          <rect
-            x={labelX - 6}
-            y={labelY - 22}
-            width={annotation.text.length * 7.5 + 12}
-            height={18}
-            rx={renderMode === "editor" ? 8 : 0}
-            fill="#ffffff"
-            stroke={annotation.color}
-            strokeWidth={isSelected ? 1.8 : 1.1}
-          />
+          {annotation.connector !== false ? (
+            <line x1={anchorX} y1={anchorY} x2={labelX} y2={labelY - 10} stroke={annotation.color} strokeWidth={1.1} />
+          ) : null}
+          {annotation.boxed !== false ? (
+            <rect
+              x={labelX - 6}
+              y={labelY - 22}
+              width={annotation.text.length * 7.5 + 12}
+              height={18}
+              rx={renderMode === "editor" ? 8 : 0}
+              fill="#ffffff"
+              stroke={annotation.color}
+              strokeWidth={isSelected ? 1.8 : 1.1}
+            />
+          ) : null}
           <text x={labelX} y={labelY - 9} className="annotation-label">
             {annotation.text}
           </text>
