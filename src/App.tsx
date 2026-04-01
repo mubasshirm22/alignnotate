@@ -15,6 +15,7 @@ import type {
   EspriptPreset,
   SecondaryStructureTrack,
   Selection,
+  StructureRenderStyle,
   TextAnnotation,
   Tool,
   VisualizationMode,
@@ -22,6 +23,7 @@ import type {
 
 type AppPage = "app" | "examples" | "quickstart" | "contact";
 type ExportPreset = "paper" | "slide" | "poster" | "custom";
+type WorkspaceStep = "setup" | "style" | "annotate" | "export";
 
 const toolOptions: { id: Tool; label: string }[] = [
   { id: "select", label: "Select" },
@@ -84,15 +86,7 @@ const toolMeta: Record<Tool, { tone: "region" | "marker" | "connector" | "label"
   erase: { tone: "utility", hint: "Remove" },
 };
 
-const sectionIcons: Record<keyof typeof defaultOpenSections, string> = {
-  alignment: "↕",
-  appearance: "◫",
-  structure: "α",
-  library: "✦",
-  project: "↓",
-};
-
-const sectionHelp: Record<keyof typeof defaultOpenSections, string> = {
+const sectionHelp = {
   alignment: "Load a Clustal or aligned FASTA file, paste alignment text, then render the figure.",
   appearance: "Choose the publication style, conservation display, and export-facing color behavior.",
   structure: "Paste aligned top and bottom structure tracks using H, E, T, C or DSSP-like symbols.",
@@ -100,13 +94,12 @@ const sectionHelp: Record<keyof typeof defaultOpenSections, string> = {
   project: "Adjust export presets, legend behavior, raster quality, and save or reopen project JSON.",
 };
 
-const defaultOpenSections = {
-  alignment: true,
-  appearance: true,
-  structure: true,
-  library: true,
-  project: true,
-};
+const workflowSteps: { id: WorkspaceStep; label: string; description: string }[] = [
+  { id: "setup", label: "1. Setup", description: "Upload or paste alignment data" },
+  { id: "style", label: "2. Style", description: "Pick view mode and structure tracks" },
+  { id: "annotate", label: "3. Annotate", description: "Add labels, markers, regions, and layers" },
+  { id: "export", label: "4. Export", description: "Preview, save, and reopen figures" },
+];
 
 const starterText = "Active-site loop";
 const defaultConservationColors: ConservationColorOverrides = {
@@ -178,12 +171,14 @@ type ProjectState = {
   printSpacing: number;
   exportScale: number;
   pdfQuality: number;
+  structureRenderStyle: StructureRenderStyle;
   structureInput: string;
   bottomStructureInput: string;
 };
 
 export default function App() {
   const [activePage, setActivePage] = useState<AppPage>("app");
+  const [workspaceStep, setWorkspaceStep] = useState<WorkspaceStep>("setup");
   const [inputText, setInputText] = useState(sampleAlignment);
   const [alignment, setAlignment] = useState<AlignmentData | null>(() => parseAlignment(sampleAlignment, "Sample kinase alignment"));
   const [error, setError] = useState<string | null>(null);
@@ -208,6 +203,7 @@ export default function App() {
   const [printSpacing, setPrintSpacing] = useState(1);
   const [exportScale, setExportScale] = useState(2);
   const [pdfQuality, setPdfQuality] = useState(0.94);
+  const [structureRenderStyle, setStructureRenderStyle] = useState<StructureRenderStyle>("classic");
   const [structureInput, setStructureInput] = useState("");
   const [secondaryStructureTrack, setSecondaryStructureTrack] = useState<SecondaryStructureTrack | null>(null);
   const [bottomStructureInput, setBottomStructureInput] = useState("");
@@ -216,21 +212,9 @@ export default function App() {
   const [previewExport, setPreviewExport] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [showToolTray, setShowToolTray] = useState(false);
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => {
-    if (typeof window === "undefined") {
-      return defaultOpenSections;
-    }
-    try {
-      const stored = window.localStorage.getItem("alignnotate-open-sections");
-      return stored ? { ...defaultOpenSections, ...JSON.parse(stored) } : defaultOpenSections;
-    } catch {
-      return defaultOpenSections;
-    }
-  });
   const [status, setStatus] = useState("Load an alignment, drag over residues, and annotate directly on the figure.");
   const editorSvgRef = useRef<SVGSVGElement | null>(null);
   const exportSvgRef = useRef<SVGSVGElement | null>(null);
-  const librarySectionRef = useRef<HTMLElement | null>(null);
   const annotationDragRef = useRef<AnnotationDrag | null>(null);
   const dragSelectionRef = useRef<Selection | null>(null);
   const dragFrameRef = useRef<number | null>(null);
@@ -389,13 +373,6 @@ export default function App() {
     }
   }, [activeTool, pendingBridgeAnchor]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.localStorage.setItem("alignnotate-open-sections", JSON.stringify(openSections));
-  }, [openSections]);
-
   function updateSelectedAnnotation(mutator: (annotation: Annotation) => Annotation): void {
     if (!selectedAnnotationId) {
       return;
@@ -406,13 +383,6 @@ export default function App() {
         annotation.id === selectedAnnotationId ? (annotation.locked ? annotation : mutator(annotation)) : annotation,
       ),
     );
-  }
-
-  function toggleSection(section: keyof typeof defaultOpenSections): void {
-    setOpenSections((current) => ({
-      ...current,
-      [section]: !current[section],
-    }));
   }
 
   function markExportPresetCustom(): void {
@@ -498,18 +468,13 @@ export default function App() {
     }
 
     setActivePage("app");
+    setWorkspaceStep("annotate");
     setStatus(`Loaded ${example} example workspace.`);
   }
 
   function openToolLibrary(): void {
-    setOpenSections((current) => ({
-      ...current,
-      library: true,
-    }));
+    setWorkspaceStep("annotate");
     setShowToolTray((current) => !current);
-    requestAnimationFrame(() => {
-      librarySectionRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
-    });
   }
 
   function loadAlignment() {
@@ -531,6 +496,7 @@ export default function App() {
       } catch {
         setBottomStructureTrack(null);
       }
+      setWorkspaceStep("style");
       setStatus(`Loaded ${parsed.sequences.length} sequences across ${parsed.alignmentLength} alignment columns.`);
     } catch (parseError) {
       const message = parseError instanceof Error ? parseError.message : "Could not parse alignment.";
@@ -565,6 +531,7 @@ export default function App() {
         } catch {
           setBottomStructureTrack(null);
         }
+        setWorkspaceStep("style");
         setStatus(`Loaded ${file.name} with ${parsed.sequences.length} sequences.`);
       } catch (parseError) {
         const message = parseError instanceof Error ? parseError.message : "Could not parse alignment.";
@@ -602,6 +569,7 @@ export default function App() {
       printSpacing,
       exportScale,
       pdfQuality,
+      structureRenderStyle,
       structureInput,
       bottomStructureInput,
     };
@@ -644,12 +612,14 @@ export default function App() {
         setPrintSpacing(project.printSpacing ?? 1);
         setExportScale(project.exportScale ?? 2);
         setPdfQuality(project.pdfQuality ?? 0.94);
+        setStructureRenderStyle(project.structureRenderStyle ?? "classic");
         setStructureInput(project.structureInput ?? "");
         setBottomStructureInput(project.bottomStructureInput ?? "");
         setSelection(null);
         setSelectedAnnotationId(null);
         setPendingBridgeAnchor(null);
         setError(null);
+        setWorkspaceStep("annotate");
         setStatus(`Loaded project ${file.name}.`);
       } catch (loadError) {
         const message = loadError instanceof Error ? loadError.message : "Could not load project.";
@@ -988,528 +958,291 @@ export default function App() {
       </header>
 
       {activePage === "app" ? (
-      <div className="app-shell">
-        <aside className="left-panel">
-          <section className="panel-card collapsible-card">
-            <button className="collapse-header" type="button" onClick={() => toggleSection("alignment")}>
-              <span className="collapse-title">
-                <span className="collapse-icon" aria-hidden="true">{sectionIcons.alignment}</span>
-                <span>Alignment</span>
-                <span className="help-dot" aria-label={sectionHelp.alignment} data-tip={sectionHelp.alignment} tabIndex={0}>?</span>
-              </span>
-              <span className="collapse-side">
-                <span className="collapse-meta">upload and parse</span>
-                <span className={openSections.alignment ? "collapse-caret open" : "collapse-caret"} aria-hidden="true">⌄</span>
-              </span>
-            </button>
-            {openSections.alignment ? <div className="collapse-body">
-              <div className="section-heading">
-                <h2>Input</h2>
-                <label className="file-button">
-                  Upload .aln / text
-                  <input type="file" accept=".aln,.aln-clustal_num,.clustal,.txt,.fa,.fasta,.fas" onChange={handleFileUpload} />
-                </label>
+      <div className="app-shell app-shell--workflow">
+        <aside className="left-panel workflow-sidebar">
+          <section className="panel-card workflow-nav-card">
+            <div className="workflow-nav-head">
+              <div>
+                <p className="eyebrow workflow-eyebrow">Workspace flow</p>
+                <h2>Build figure</h2>
               </div>
-              <textarea
-                className="alignment-input"
-                value={inputText}
-                onChange={(event) => setInputText(event.target.value)}
-                spellCheck={false}
-              />
-              <div className="inline-actions">
-                <button className="primary-button" onClick={loadAlignment}>
-                  Render alignment
+              <span className="workflow-summary-tag">{workflowSteps.find((step) => step.id === workspaceStep)?.label}</span>
+            </div>
+            <div className="workflow-step-list">
+              {workflowSteps.map((step) => (
+                <button
+                  key={step.id}
+                  className={workspaceStep === step.id ? "workflow-step active" : "workflow-step"}
+                  onClick={() => setWorkspaceStep(step.id)}
+                >
+                  <span className="workflow-step-label">{step.label}</span>
+                  <span className="workflow-step-copy">{step.description}</span>
                 </button>
-                <button className="secondary-button" onClick={() => setInputText(sampleAlignment)}>
-                  Load sample
-                </button>
-              </div>
-              {error ? <p className="error-text">{error}</p> : null}
-            </div> : null}
+              ))}
+            </div>
           </section>
 
-          <section ref={librarySectionRef} className="panel-card collapsible-card">
-            <button className="collapse-header" type="button" onClick={() => toggleSection("appearance")}>
-              <span className="collapse-title">
-                <span className="collapse-icon" aria-hidden="true">{sectionIcons.appearance}</span>
-                <span>Appearance</span>
-                <span className="help-dot" aria-label={sectionHelp.appearance} data-tip={sectionHelp.appearance} tabIndex={0}>?</span>
-              </span>
-              <span className="collapse-side">
-                <span className="collapse-meta">view and conservation</span>
-                <span className={openSections.appearance ? "collapse-caret open" : "collapse-caret"} aria-hidden="true">⌄</span>
-              </span>
-            </button>
-            {openSections.appearance ? <div className="collapse-body">
-              <label className="field-label">
-                View mode
-                <select className="text-field" value={visualizationMode} onChange={(event) => setVisualizationMode(event.target.value as VisualizationMode)}>
-                  <option value="espript">ESPript</option>
-                  <option value="publication-classic">Classic</option>
-                  <option value="publication-flashy">Flashy</option>
-                  <option value="publication-mono">Mono</option>
-                  <option value="chemistry">Chemistry</option>
-                  <option value="residue">Residue</option>
-                </select>
-              </label>
-              {visualizationMode === "espript" ? (
+          {workspaceStep === "setup" ? (
+            <>
+              <section className="panel-card workspace-card">
+                <div className="workspace-card-head">
+                  <div>
+                    <h2>Load alignment</h2>
+                    <p className="helper-text">Start with a Clustal `.aln`, aligned FASTA, or pasted alignment text.</p>
+                  </div>
+                  <span className="help-dot" aria-label={sectionHelp.alignment} data-tip={sectionHelp.alignment} tabIndex={0}>?</span>
+                </div>
+                <div className="inline-actions">
+                  <label className="file-button">
+                    Upload alignment
+                    <input type="file" accept=".aln,.aln-clustal_num,.clustal,.txt,.fa,.fasta,.fas" onChange={handleFileUpload} />
+                  </label>
+                  <button className="secondary-button" onClick={() => setInputText(sampleAlignment)}>
+                    Load sample text
+                  </button>
+                </div>
+                <textarea
+                  className="alignment-input"
+                  value={inputText}
+                  onChange={(event) => setInputText(event.target.value)}
+                  spellCheck={false}
+                />
+                <div className="inline-actions">
+                  <button className="primary-button" onClick={loadAlignment}>
+                    Render alignment
+                  </button>
+                  <button className="secondary-button" onClick={() => setWorkspaceStep("style")}>
+                    Continue to style
+                  </button>
+                </div>
+                {error ? <p className="error-text">{error}</p> : null}
+              </section>
+
+              <section className="panel-card workspace-card">
+                <div className="workspace-card-head">
+                  <div>
+                    <h2>Resume or start from an example</h2>
+                    <p className="helper-text">Reopen a project JSON or jump into a prepared demo workspace.</p>
+                  </div>
+                </div>
+                <div className="inline-actions">
+                  <label className="file-button">
+                    Load project JSON
+                    <input type="file" accept=".json,application/json" onChange={handleProjectUpload} />
+                  </label>
+                  <button className="secondary-button" onClick={() => loadExampleWorkspace("espript")}>
+                    ESPript example
+                  </button>
+                  <button className="secondary-button" onClick={() => loadExampleWorkspace("story")}>
+                    Talk example
+                  </button>
+                  <button className="secondary-button" onClick={() => loadExampleWorkspace("mono")}>
+                    Mono example
+                  </button>
+                </div>
+              </section>
+            </>
+          ) : null}
+
+          {workspaceStep === "style" ? (
+            <>
+              <section className="panel-card workspace-card">
+                <div className="workspace-card-head">
+                  <div>
+                    <h2>Appearance</h2>
+                    <p className="helper-text">Choose the alignment style and conservation behavior you want to publish.</p>
+                  </div>
+                  <span className="help-dot" aria-label={sectionHelp.appearance} data-tip={sectionHelp.appearance} tabIndex={0}>?</span>
+                </div>
                 <label className="field-label">
-                  ESPript preset
-                  <select className="text-field" value={espriptPreset} onChange={(event) => setEspriptPreset(event.target.value as EspriptPreset)}>
-                    <option value="classic">Classic</option>
-                    <option value="flashy">Flashy</option>
-                    <option value="identity">Identity</option>
+                  View mode
+                  <select className="text-field" value={visualizationMode} onChange={(event) => setVisualizationMode(event.target.value as VisualizationMode)}>
+                    <option value="espript">ESPript</option>
+                    <option value="publication-classic">Classic</option>
+                    <option value="publication-flashy">Flashy</option>
+                    <option value="publication-mono">Mono</option>
+                    <option value="chemistry">Chemistry</option>
+                    <option value="residue">Residue</option>
                   </select>
                 </label>
-              ) : null}
-              <label className="toggle-row">
-                <span>Conservation strip</span>
-                <input
-                  type="checkbox"
-                  checked={showConservationStrip}
-                  onChange={(event) => setShowConservationStrip(event.target.checked)}
-                />
-              </label>
-              <label className="toggle-row">
-                <span>Custom conservation colors</span>
-                <input
-                  type="checkbox"
-                  checked={useCustomConservationColors}
-                  onChange={(event) => setUseCustomConservationColors(event.target.checked)}
-                />
-              </label>
-              {useCustomConservationColors ? (
-                <div className="color-grid">
-                  <label className="mini-color-field">
-                    <span>Strict</span>
-                    <input
-                      type="color"
-                      value={conservationColors.strict}
-                      onChange={(event) => updateConservationColor("strict", event.target.value)}
-                    />
+                {visualizationMode === "espript" ? (
+                  <label className="field-label">
+                    ESPript preset
+                    <select className="text-field" value={espriptPreset} onChange={(event) => setEspriptPreset(event.target.value as EspriptPreset)}>
+                      <option value="classic">Classic</option>
+                      <option value="flashy">Flashy</option>
+                      <option value="identity">Identity</option>
+                    </select>
                   </label>
-                  <label className="mini-color-field">
-                    <span>Similar</span>
-                    <input
-                      type="color"
-                      value={conservationColors.similar}
-                      onChange={(event) => updateConservationColor("similar", event.target.value)}
-                    />
-                  </label>
-                  <label className="mini-color-field">
-                    <span>Weak</span>
-                    <input
-                      type="color"
-                      value={conservationColors.weak}
-                      onChange={(event) => updateConservationColor("weak", event.target.value)}
-                    />
-                  </label>
-                  <label className="mini-color-field">
-                    <span>Neutral</span>
-                    <input
-                      type="color"
-                      value={conservationColors.neutral}
-                      onChange={(event) => updateConservationColor("neutral", event.target.value)}
-                    />
-                  </label>
-                  <button
-                    className="secondary-button reset-button"
-                    onClick={() => {
-                      setConservationColors(defaultConservationColors);
-                      setUseCustomConservationColors(false);
-                    }}
-                  >
-                    Reset colors
-                  </button>
-                </div>
-              ) : null}
-              <label className="field-label">
-                Box weight
-                <input
-                  type="range"
-                  min="1.2"
-                  max="3.6"
-                  step="0.2"
-                  value={boxStrokeWidth}
-                  onChange={(event) => {
-                    markExportPresetCustom();
-                    setBoxStrokeWidth(Number(event.target.value));
-                  }}
-                />
-              </label>
-            </div> : null}
-          </section>
-
-          <section className="panel-card collapsible-card">
-            <button className="collapse-header" type="button" onClick={() => toggleSection("structure")}>
-              <span className="collapse-title">
-                <span className="collapse-icon" aria-hidden="true">{sectionIcons.structure}</span>
-                <span>Structure</span>
-                <span className="help-dot" aria-label={sectionHelp.structure} data-tip={sectionHelp.structure} tabIndex={0}>?</span>
-              </span>
-              <span className="collapse-side">
-                <span className="collapse-meta">top and bottom tracks</span>
-                <span className={openSections.structure ? "collapse-caret open" : "collapse-caret"} aria-hidden="true">⌄</span>
-              </span>
-            </button>
-            {openSections.structure ? <div className="collapse-body">
-              <div className="section-heading">
-                <h2>Top lane</h2>
-                <button className="secondary-button" onClick={loadSampleStructureTrack}>
-                  Load sample
-                </button>
-              </div>
-              <textarea
-                className="alignment-input structure-input"
-                value={structureInput}
-                onChange={(event) => setStructureInput(event.target.value)}
-                placeholder={"Optional aligned track\nUse H for helix, E for strand, T for turn, C/. for coil"}
-                spellCheck={false}
-              />
-              <div className="section-heading structure-subhead">
-                <h2>Bottom lane</h2>
-                <button className="secondary-button" onClick={loadSampleBottomTrack}>
-                  Load sample
-                </button>
-              </div>
-              <textarea
-                className="alignment-input structure-input"
-                value={bottomStructureInput}
-                onChange={(event) => setBottomStructureInput(event.target.value)}
-                placeholder={"Optional bottom track\nAccessibility / second structure lane"}
-                spellCheck={false}
-              />
-            </div> : null}
-          </section>
-
-          <section className="panel-card collapsible-card">
-            <button className="collapse-header" type="button" onClick={() => toggleSection("library")}>
-              <span className="collapse-title">
-                <span className="collapse-icon" aria-hidden="true">{sectionIcons.library}</span>
-                <span>Annotation palette</span>
-                <span className="help-dot" aria-label={sectionHelp.library} data-tip={sectionHelp.library} tabIndex={0}>?</span>
-              </span>
-              <span className="collapse-side">
-                <span className="collapse-meta">tools and layers</span>
-                <span className={openSections.library ? "collapse-caret open" : "collapse-caret"} aria-hidden="true">⌄</span>
-              </span>
-            </button>
-            {openSections.library ? <div className="collapse-body">
-              <div className="tool-grid">
-                {toolOptions.map((tool) => (
-                  <button
-                    key={tool.id}
-                    className={tool.id === activeTool ? "tool-button active" : "tool-button"}
-                    onClick={() => setActiveTool(tool.id)}
-                    data-tone={toolMeta[tool.id].tone}
-                  >
-                    <span className="tool-icon" aria-hidden="true">
-                      {toolIcons[tool.id]}
-                    </span>
-                    <span>{tool.label}</span>
-                    <span className="tool-caption">{toolMeta[tool.id].hint}</span>
-                  </button>
-                ))}
-              </div>
-              <p className="helper-text">
-                Drag across cells to apply region tools. Triangle tools place markers above the clicked residue. Bridge draws an overhead connector between two clicked residues in one block.
-              </p>
-              <div className="layer-list">
-                {annotations.length === 0 ? (
-                  <p className="helper-text">No annotations yet.</p>
-                ) : (
-                  [...annotations].reverse().map((annotation) => {
-                    const index = annotations.findIndex((item) => item.id === annotation.id);
-                    const isSelected = selectedAnnotationId === annotation.id;
-                    return (
-                      <div key={annotation.id} className={isSelected ? "layer-row active" : "layer-row"}>
-                        <button
-                          className="layer-swatch"
-                          style={{ background: annotation.color }}
-                          onClick={() => setSelectedAnnotationId(annotation.id)}
-                          aria-label={`Select ${annotationDisplayName(annotation)}`}
-                        />
-                        <div className="layer-main">
-                          <button className="layer-label" onClick={() => setSelectedAnnotationId(annotation.id)}>
-                            {annotationDisplayName(annotation)}
-                          </button>
-                          <div className="layer-meta">
-                            <span>{annotation.type.replace("-", " ")}</span>
-                            {annotation.locked ? <span>locked</span> : null}
-                            {annotation.visible === false ? <span>hidden</span> : null}
-                          </div>
-                        </div>
-                        <div className="layer-actions">
-                          <button
-                            className="layer-action"
-                            onClick={() =>
-                              setAnnotations((current) =>
-                                current.map((item) =>
-                                  item.id === annotation.id ? { ...item, visible: item.visible === false ? true : false } : item,
-                                ),
-                              )
-                            }
-                          >
-                            {annotation.visible === false ? "Show" : "Hide"}
-                          </button>
-                          <button
-                            className="layer-action"
-                            onClick={() =>
-                              setAnnotations((current) =>
-                                current.map((item) => (item.id === annotation.id ? { ...item, locked: !item.locked } : item)),
-                              )
-                            }
-                          >
-                            {annotation.locked ? "Unlock" : "Lock"}
-                          </button>
-                          <button className="layer-action" onClick={() => duplicateAnnotation(annotation.id)}>
-                            Copy
-                          </button>
-                          <button
-                            className="layer-action"
-                            disabled={index === annotations.length - 1}
-                            onClick={() =>
-                              setAnnotations((current) => {
-                                const next = [...current];
-                                const from = next.findIndex((item) => item.id === annotation.id);
-                                if (from < 0 || from === next.length - 1) {
-                                  return current;
-                                }
-                                const [item] = next.splice(from, 1);
-                                next.splice(from + 1, 0, item);
-                                return next;
-                              })
-                            }
-                          >
-                            Down
-                          </button>
-                          <button
-                            className="layer-action"
-                            disabled={index === 0}
-                            onClick={() =>
-                              setAnnotations((current) => {
-                                const next = [...current];
-                                const from = next.findIndex((item) => item.id === annotation.id);
-                                if (from <= 0) {
-                                  return current;
-                                }
-                                const [item] = next.splice(from, 1);
-                                next.splice(from - 1, 0, item);
-                                return next;
-                              })
-                            }
-                          >
-                            Up
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div> : null}
-          </section>
-
-          <section className="panel-card collapsible-card">
-            <button className="collapse-header" type="button" onClick={() => toggleSection("project")}>
-              <span className="collapse-title">
-                <span className="collapse-icon" aria-hidden="true">{sectionIcons.project}</span>
-                <span>Project</span>
-                <span className="help-dot" aria-label={sectionHelp.project} data-tip={sectionHelp.project} tabIndex={0}>?</span>
-              </span>
-              <span className="collapse-side">
-                <span className="collapse-meta">export and save</span>
-                <span className={openSections.project ? "collapse-caret open" : "collapse-caret"} aria-hidden="true">⌄</span>
-              </span>
-            </button>
-            {openSections.project ? <div className="collapse-body">
-              <label className="field-label">
-                Export preset
-                <div className="segmented">
-                  {(["paper", "slide", "poster"] as const).map((preset) => (
-                    <button
-                      key={preset}
-                      className={exportPreset === preset ? "segment-button active" : "segment-button"}
-                      onClick={() => applyExportPreset(preset)}
-                    >
-                      {preset}
-                    </button>
-                  ))}
-                </div>
-                <span className="helper-text">
-                  {exportPreset === "custom" ? "Custom export settings" : `${exportPreset} preset active`}
-                </span>
-              </label>
-              <label className="toggle-row">
-                <span>Show legend</span>
-                <input
-                  type="checkbox"
-                  checked={showLegend}
-                  onChange={(event) => {
-                    markExportPresetCustom();
-                    setShowLegend(event.target.checked);
-                  }}
-                />
-              </label>
-              {showLegend ? (
-                <>
-                  <label className="toggle-row">
-                    <span>Include standard legend</span>
-                    <input
-                      type="checkbox"
-                      checked={includeAutoLegend}
-                      onChange={(event) => setIncludeAutoLegend(event.target.checked)}
-                    />
-                  </label>
-                  <div className="legend-editor">
-                    <div className="section-heading">
-                      <h3>Custom legend items</h3>
-                      <button className="secondary-button" onClick={addLegendItem}>
-                        Add item
-                      </button>
-                    </div>
-                    {customLegendItems.length === 0 ? (
-                      <p className="helper-text">Add figure-specific legend rows for motifs, annotations, or custom callouts.</p>
-                    ) : (
-                      <div className="legend-list">
-                        {customLegendItems.map((item) => (
-                          <div key={item.id} className="legend-row">
-                            <input
-                              className="text-field"
-                              value={item.label}
-                              onChange={(event) =>
-                                setCustomLegendItems((current) =>
-                                  current.map((entry) =>
-                                    entry.id === item.id ? { ...entry, label: event.target.value } : entry,
-                                  ),
-                                )
-                              }
-                              placeholder="Legend label"
-                            />
-                            <select
-                              className="text-field"
-                              value={item.style}
-                              onChange={(event) =>
-                                setCustomLegendItems((current) =>
-                                  current.map((entry) =>
-                                    entry.id === item.id
-                                      ? { ...entry, style: event.target.value as CustomLegendItem["style"] }
-                                      : entry,
-                                  ),
-                                )
-                              }
-                            >
-                              <option value="fill">Fill</option>
-                              <option value="outline">Outline</option>
-                              <option value="text">Text</option>
-                            </select>
-                            <input
-                              className="toolbar-color"
-                              type="color"
-                              value={item.color}
-                              onChange={(event) =>
-                                setCustomLegendItems((current) =>
-                                  current.map((entry) =>
-                                    entry.id === item.id ? { ...entry, color: event.target.value } : entry,
-                                  ),
-                                )
-                              }
-                            />
-                            <button
-                              className="layer-action"
-                              onClick={() => setCustomLegendItems((current) => current.filter((entry) => entry.id !== item.id))}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </>
-              ) : null}
-              <label className="field-label">
-                Print columns
-                <input
-                  type="range"
-                  min="40"
-                  max="80"
-                  step="5"
-                  value={printColumns}
-                  onChange={(event) => {
-                    markExportPresetCustom();
-                    setPrintColumns(Number(event.target.value));
-                  }}
-                />
-                <span className="helper-text">{printColumns} residues per row</span>
-              </label>
-              <label className="field-label">
-                Print spacing
-                <input
-                  type="range"
-                  min="0.85"
-                  max="1.2"
-                  step="0.05"
-                  value={printSpacing}
-                  onChange={(event) => {
-                    markExportPresetCustom();
-                    setPrintSpacing(Number(event.target.value));
-                  }}
-                />
-                <span className="helper-text">{printSpacing.toFixed(2)}x spacing</span>
-              </label>
-              <label className="field-label">
-                Raster scale
-                <input
-                  type="range"
-                  min="1"
-                  max="4"
-                  step="1"
-                  value={exportScale}
-                  onChange={(event) => {
-                    markExportPresetCustom();
-                    setExportScale(Number(event.target.value));
-                  }}
-                />
-                <span className="helper-text">{exportScale}x PNG/PDF resolution</span>
-              </label>
-              <label className="field-label">
-                PDF quality
-                <input
-                  type="range"
-                  min="0.75"
-                  max="1"
-                  step="0.05"
-                  value={pdfQuality}
-                  onChange={(event) => {
-                    markExportPresetCustom();
-                    setPdfQuality(Number(event.target.value));
-                  }}
-                />
-                <span className="helper-text">{Math.round(pdfQuality * 100)}% JPEG quality in PDF</span>
-              </label>
-              <div className="inline-actions export-actions">
-                <button className="secondary-button" onClick={saveProject}>
-                  Save project JSON
-                </button>
-                <label className="file-button">
-                  Load project JSON
-                  <input type="file" accept=".json,application/json" onChange={handleProjectUpload} />
+                ) : null}
+                <label className="toggle-row">
+                  <span>Conservation strip</span>
+                  <input
+                    type="checkbox"
+                    checked={showConservationStrip}
+                    onChange={(event) => setShowConservationStrip(event.target.checked)}
+                  />
                 </label>
-              </div>
-            </div> : null}
-          </section>
-        </aside>
+                <label className="toggle-row">
+                  <span>Custom conservation colors</span>
+                  <input
+                    type="checkbox"
+                    checked={useCustomConservationColors}
+                    onChange={(event) => setUseCustomConservationColors(event.target.checked)}
+                  />
+                </label>
+                {useCustomConservationColors ? (
+                  <div className="color-grid">
+                    <label className="mini-color-field">
+                      <span>Strict</span>
+                      <input
+                        type="color"
+                        value={conservationColors.strict}
+                        onChange={(event) => updateConservationColor("strict", event.target.value)}
+                      />
+                    </label>
+                    <label className="mini-color-field">
+                      <span>Similar</span>
+                      <input
+                        type="color"
+                        value={conservationColors.similar}
+                        onChange={(event) => updateConservationColor("similar", event.target.value)}
+                      />
+                    </label>
+                    <label className="mini-color-field">
+                      <span>Weak</span>
+                      <input
+                        type="color"
+                        value={conservationColors.weak}
+                        onChange={(event) => updateConservationColor("weak", event.target.value)}
+                      />
+                    </label>
+                    <label className="mini-color-field">
+                      <span>Neutral</span>
+                      <input
+                        type="color"
+                        value={conservationColors.neutral}
+                        onChange={(event) => updateConservationColor("neutral", event.target.value)}
+                      />
+                    </label>
+                    <button
+                      className="secondary-button reset-button"
+                      onClick={() => {
+                        setConservationColors(defaultConservationColors);
+                        setUseCustomConservationColors(false);
+                      }}
+                    >
+                      Reset colors
+                    </button>
+                  </div>
+                ) : null}
+                <label className="field-label">
+                  Box weight
+                  <input
+                    type="range"
+                    min="1.2"
+                    max="3.6"
+                    step="0.2"
+                    value={boxStrokeWidth}
+                    onChange={(event) => {
+                      markExportPresetCustom();
+                      setBoxStrokeWidth(Number(event.target.value));
+                    }}
+                  />
+                </label>
+              </section>
 
-        <main className="canvas-panel">
-          <div className="toolbar-stack">
-            <div className="workspace-toolbar">
-              <div className="toolbar-panel toolbar-panel--tools">
-                <div className="toolbar-panel-head">
-                  <span className="toolbar-label">Quick tools <span className="help-dot help-dot--inline" aria-label="Fast access to the most-used annotation tools." data-tip="Fast access to the most-used annotation tools." tabIndex={0}>?</span></span>
-                  <span className="toolbar-panel-note">Click to annotate</span>
+              <section className="panel-card workspace-card">
+                <div className="workspace-card-head">
+                  <div>
+                    <h2>Structure tracks</h2>
+                    <p className="helper-text">Add top and bottom lanes and choose how helices, strands, and linkers are drawn.</p>
+                  </div>
+                  <span className="help-dot" aria-label={sectionHelp.structure} data-tip={sectionHelp.structure} tabIndex={0}>?</span>
                 </div>
-                <div className="toolbar-tools">
+                <label className="field-label">
+                  Track style
+                  <select
+                    className="text-field"
+                    value={structureRenderStyle}
+                    onChange={(event) => setStructureRenderStyle(event.target.value as StructureRenderStyle)}
+                  >
+                    <option value="classic">Classic</option>
+                    <option value="ssdraw">SSDraw</option>
+                    <option value="protopo">ProTopo</option>
+                  </select>
+                  <span className="helper-text">
+                    `Classic` uses a wave-and-arrow alignment track, `SSDraw` follows the stacked ribbon style, and `ProTopo` uses topology-style helix blocks, arrows, and linkers.
+                  </span>
+                </label>
+                <div className="section-heading">
+                  <h3>Top lane</h3>
+                  <button className="secondary-button" onClick={loadSampleStructureTrack}>
+                    Load sample
+                  </button>
+                </div>
+                <textarea
+                  className="alignment-input structure-input"
+                  value={structureInput}
+                  onChange={(event) => setStructureInput(event.target.value)}
+                  placeholder={"Optional aligned track\nUse H for helix, E for strand, T for turn, C/. for coil"}
+                  spellCheck={false}
+                />
+                <div className="section-heading structure-subhead">
+                  <h3>Bottom lane</h3>
+                  <button className="secondary-button" onClick={loadSampleBottomTrack}>
+                    Load sample
+                  </button>
+                </div>
+                <textarea
+                  className="alignment-input structure-input"
+                  value={bottomStructureInput}
+                  onChange={(event) => setBottomStructureInput(event.target.value)}
+                  placeholder={"Optional bottom track\nAccessibility / second structure lane"}
+                  spellCheck={false}
+                />
+                <div className="inline-actions">
+                  <button className="secondary-button" onClick={() => setWorkspaceStep("annotate")}>
+                    Continue to annotate
+                  </button>
+                </div>
+              </section>
+            </>
+          ) : null}
+
+          {workspaceStep === "annotate" ? (
+            <>
+              <section className="panel-card workspace-card">
+                <div className="workspace-card-head">
+                  <div>
+                    <h2>Annotation palette</h2>
+                    <p className="helper-text">Pick a tool, set its color, then annotate directly on the alignment.</p>
+                  </div>
+                  <span className="help-dot" aria-label={sectionHelp.library} data-tip={sectionHelp.library} tabIndex={0}>?</span>
+                </div>
+                <div className="palette-toolbar">
+                  <label className="palette-color-field">
+                    <span className="toolbar-label">Color</span>
+                    <input
+                      className="toolbar-color"
+                      type="color"
+                      value={color}
+                      onChange={(event) => {
+                        const nextColor = event.target.value;
+                        setColor(nextColor);
+                        updateSelectedAnnotation((annotation) => ({ ...annotation, color: nextColor }));
+                      }}
+                    />
+                  </label>
+                  <div className="palette-active-tool" data-tone={toolMeta[activeTool].tone}>
+                    <span className="tool-icon" aria-hidden="true">{toolIcons[activeTool]}</span>
+                    <div>
+                      <strong>{toolOptions.find((tool) => tool.id === activeTool)?.label}</strong>
+                      <span>{toolMeta[activeTool].hint}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="toolbar-tools palette-quick-tools">
                   {quickToolOptions.map((tool) => (
                     <button
                       key={tool.id}
@@ -1528,315 +1261,602 @@ export default function App() {
                     <span>More tools</span>
                   </button>
                 </div>
-              </div>
-
-              <div className="toolbar-panel toolbar-panel--export">
-                <div className="toolbar-panel-head">
-                  <span className="toolbar-label">Save options <span className="help-dot help-dot--inline" aria-label="Preview the export, set annotation color, and export SVG, PNG, or PDF." data-tip="Preview the export, set annotation color, and export SVG, PNG, or PDF." tabIndex={0}>?</span></span>
-                  <span className="toolbar-panel-note">Click to save</span>
-                </div>
-                <div className="toolbar-save-row">
-                  <div className="toolbar-group">
-                    <span className="toolbar-label">Color <span className="help-dot help-dot--inline" aria-label="Sets the color for newly created annotations and the selected annotation." data-tip="Sets the color for newly created annotations and the selected annotation." tabIndex={0}>?</span></span>
-                    <input
-                      className="toolbar-color"
-                      type="color"
-                      value={color}
-                      onChange={(event) => {
-                        const nextColor = event.target.value;
-                        setColor(nextColor);
-                        updateSelectedAnnotation((annotation) => ({ ...annotation, color: nextColor }));
-                      }}
-                    />
+                {showToolTray ? (
+                  <div className="tool-grid tool-grid--tray">
+                    {toolOptions.map((tool) => (
+                      <button
+                        key={`tray-${tool.id}`}
+                        className={tool.id === activeTool ? "tool-button active" : "tool-button"}
+                        onClick={() => {
+                          setActiveTool(tool.id);
+                          setShowToolTray(false);
+                        }}
+                        data-tone={toolMeta[tool.id].tone}
+                      >
+                        <span className="tool-icon" aria-hidden="true">
+                          {toolIcons[tool.id]}
+                        </span>
+                        <span>{tool.label}</span>
+                        <span className="tool-caption">{toolMeta[tool.id].hint}</span>
+                      </button>
+                    ))}
                   </div>
-                  <label className="toolbar-toggle">
+                ) : null}
+                <p className="helper-text">
+                  Drag across cells to apply region tools. Markers place above the clicked residue, arrows can be dragged, and bridges connect two residues in one visible block.
+                </p>
+              </section>
+
+              {selectedAnnotation ? (
+                <section className="panel-card workspace-card inspector-card">
+                  <div className="workspace-card-head">
+                    <div>
+                      <h2>Selected annotation</h2>
+                      <p className="helper-text">Edit the selected element without leaving the canvas.</p>
+                    </div>
+                    <span className="inspector-tag">{selectedAnnotation.type.replace("-", " ")}</span>
+                  </div>
+                  <div className="inspector-actions">
+                    <button className="secondary-button" onClick={() => duplicateAnnotation(selectedAnnotation.id)}>
+                      Duplicate
+                    </button>
+                    <button
+                      className={selectedAnnotation.locked ? "secondary-button active-toggle" : "secondary-button"}
+                      onClick={() =>
+                        setAnnotations((current) =>
+                          current.map((annotation) =>
+                            annotation.id === selectedAnnotation.id ? { ...annotation, locked: !annotation.locked } : annotation,
+                          ),
+                        )
+                      }
+                    >
+                      {selectedAnnotation.locked ? "Locked" : "Lock"}
+                    </button>
+                  </div>
+                  <div className="inspector-grid">
+                    <label className="field-label">
+                      Name
+                      <input
+                        className="text-field"
+                        value={selectedAnnotation.label ?? ""}
+                        onChange={(event) => {
+                          const nextLabel = event.target.value;
+                          updateSelectedAnnotation((annotation) => ({ ...annotation, label: nextLabel }));
+                        }}
+                      />
+                    </label>
+                    <label className="field-label">
+                      Color
+                      <input
+                        className="toolbar-color"
+                        type="color"
+                        value={selectedAnnotation.color}
+                        onChange={(event) => {
+                          const nextColor = event.target.value;
+                          setColor(nextColor);
+                          updateSelectedAnnotation((annotation) => ({ ...annotation, color: nextColor }));
+                        }}
+                      />
+                    </label>
+                    {selectedAnnotation.type === "text" ? (
+                      <label className="field-label">
+                        Label
+                        <input
+                          className="text-field"
+                          value={selectedAnnotation.text}
+                          onChange={(event) => {
+                            const nextValue = event.target.value;
+                            setTextValue(nextValue);
+                            updateSelectedAnnotation((annotation) =>
+                              annotation.type === "text" ? { ...annotation, text: nextValue || starterText } : annotation,
+                            );
+                          }}
+                        />
+                      </label>
+                    ) : null}
+                    {"selection" in selectedAnnotation &&
+                    (selectedAnnotation.type === "triangle-up" ||
+                      selectedAnnotation.type === "triangle-down" ||
+                      selectedAnnotation.type === "arrow-down" ||
+                      selectedAnnotation.type === "circle" ||
+                      selectedAnnotation.type === "open-circle" ||
+                      selectedAnnotation.type === "star" ||
+                      selectedAnnotation.type === "arrow" ||
+                      selectedAnnotation.type === "bracket") ? (
+                      <label className="field-label">
+                        Marker size
+                        <input
+                          type="range"
+                          min="0.7"
+                          max="1.8"
+                          step="0.1"
+                          value={selectedAnnotation.size ?? 1}
+                          onChange={(event) => {
+                            const nextSize = Number(event.target.value);
+                            updateSelectedAnnotation((annotation) =>
+                              "selection" in annotation &&
+                              (annotation.type === "triangle-up" ||
+                                annotation.type === "triangle-down" ||
+                                annotation.type === "arrow-down" ||
+                                annotation.type === "circle" ||
+                                annotation.type === "open-circle" ||
+                                annotation.type === "star" ||
+                                annotation.type === "arrow" ||
+                                annotation.type === "bracket")
+                                ? { ...annotation, size: nextSize }
+                                : annotation,
+                            );
+                          }}
+                        />
+                      </label>
+                    ) : null}
+                    {"selection" in selectedAnnotation &&
+                    (selectedAnnotation.type === "arrow" ||
+                      selectedAnnotation.type === "bracket" ||
+                      selectedAnnotation.type === "arrow-down") ? (
+                      <label className="field-label">
+                        Placement
+                        <select
+                          className="text-field"
+                          value={selectedAnnotation.placement ?? "top"}
+                          onChange={(event) => {
+                            const placement = event.target.value as "top" | "bottom";
+                            updateSelectedAnnotation((annotation) =>
+                              "selection" in annotation &&
+                              (annotation.type === "arrow" || annotation.type === "bracket" || annotation.type === "arrow-down")
+                                ? { ...annotation, placement }
+                                : annotation,
+                            );
+                          }}
+                        >
+                          <option value="top">Top</option>
+                          <option value="bottom">Bottom</option>
+                        </select>
+                      </label>
+                    ) : null}
+                    {selectedAnnotation.type === "bridge" ? (
+                      <label className="field-label">
+                        Bridge style
+                        <select
+                          className="text-field"
+                          value={selectedAnnotation.style ?? "bracket"}
+                          onChange={(event) => {
+                            const style = event.target.value as "bracket" | "arch";
+                            updateSelectedAnnotation((annotation) =>
+                              annotation.type === "bridge" ? { ...annotation, style } : annotation,
+                            );
+                          }}
+                        >
+                          <option value="bracket">Bracket</option>
+                          <option value="arch">Arch</option>
+                        </select>
+                      </label>
+                    ) : null}
+                    {selectedAnnotation.type === "bridge" ? (
+                      <label className="field-label">
+                        Placement
+                        <select
+                          className="text-field"
+                          value={selectedAnnotation.placement ?? "top"}
+                          onChange={(event) => {
+                            const placement = event.target.value as "top" | "bottom";
+                            updateSelectedAnnotation((annotation) =>
+                              annotation.type === "bridge" ? { ...annotation, placement } : annotation,
+                            );
+                          }}
+                        >
+                          <option value="top">Top</option>
+                          <option value="bottom">Bottom</option>
+                        </select>
+                      </label>
+                    ) : null}
+                    {selectedAnnotation.type === "bridge" ? (
+                      <label className="field-label">
+                        Bridge height
+                        <input
+                          type="range"
+                          min="0.8"
+                          max="2.2"
+                          step="0.1"
+                          value={selectedAnnotation.height ?? 1}
+                          onChange={(event) => {
+                            const height = Number(event.target.value);
+                            updateSelectedAnnotation((annotation) =>
+                              annotation.type === "bridge" ? { ...annotation, height } : annotation,
+                            );
+                          }}
+                        />
+                      </label>
+                    ) : null}
+                  </div>
+                </section>
+              ) : null}
+
+              <section className="panel-card workspace-card">
+                <div className="workspace-card-head">
+                  <div>
+                    <h2>Layers</h2>
+                    <p className="helper-text">Select, lock, reorder, duplicate, or hide annotations without changing the figure geometry.</p>
+                  </div>
+                </div>
+                <div className="layer-list">
+                  {annotations.length === 0 ? (
+                    <p className="helper-text">No annotations yet.</p>
+                  ) : (
+                    [...annotations].reverse().map((annotation) => {
+                      const index = annotations.findIndex((item) => item.id === annotation.id);
+                      const isSelected = selectedAnnotationId === annotation.id;
+                      return (
+                        <div key={annotation.id} className={isSelected ? "layer-row active" : "layer-row"}>
+                          <button
+                            className="layer-swatch"
+                            style={{ background: annotation.color }}
+                            onClick={() => setSelectedAnnotationId(annotation.id)}
+                            aria-label={`Select ${annotationDisplayName(annotation)}`}
+                          />
+                          <div className="layer-main">
+                            <button className="layer-label" onClick={() => setSelectedAnnotationId(annotation.id)}>
+                              {annotationDisplayName(annotation)}
+                            </button>
+                            <div className="layer-meta">
+                              <span>{annotation.type.replace("-", " ")}</span>
+                              {annotation.locked ? <span>locked</span> : null}
+                              {annotation.visible === false ? <span>hidden</span> : null}
+                            </div>
+                          </div>
+                          <div className="layer-actions">
+                            <button
+                              className="layer-action"
+                              onClick={() =>
+                                setAnnotations((current) =>
+                                  current.map((item) =>
+                                    item.id === annotation.id ? { ...item, visible: item.visible === false ? true : false } : item,
+                                  ),
+                                )
+                              }
+                            >
+                              {annotation.visible === false ? "Show" : "Hide"}
+                            </button>
+                            <button
+                              className="layer-action"
+                              onClick={() =>
+                                setAnnotations((current) =>
+                                  current.map((item) => (item.id === annotation.id ? { ...item, locked: !item.locked } : item)),
+                                )
+                              }
+                            >
+                              {annotation.locked ? "Unlock" : "Lock"}
+                            </button>
+                            <button className="layer-action" onClick={() => duplicateAnnotation(annotation.id)}>
+                              Copy
+                            </button>
+                            <button
+                              className="layer-action"
+                              disabled={index === annotations.length - 1}
+                              onClick={() =>
+                                setAnnotations((current) => {
+                                  const next = [...current];
+                                  const from = next.findIndex((item) => item.id === annotation.id);
+                                  if (from < 0 || from === next.length - 1) {
+                                    return current;
+                                  }
+                                  const [item] = next.splice(from, 1);
+                                  next.splice(from + 1, 0, item);
+                                  return next;
+                                })
+                              }
+                            >
+                              Down
+                            </button>
+                            <button
+                              className="layer-action"
+                              disabled={index === 0}
+                              onClick={() =>
+                                setAnnotations((current) => {
+                                  const next = [...current];
+                                  const from = next.findIndex((item) => item.id === annotation.id);
+                                  if (from <= 0) {
+                                    return current;
+                                  }
+                                  const [item] = next.splice(from, 1);
+                                  next.splice(from - 1, 0, item);
+                                  return next;
+                                })
+                              }
+                            >
+                              Up
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                <div className="inline-actions">
+                  <button className="secondary-button" onClick={() => setWorkspaceStep("export")}>
+                    Continue to export
+                  </button>
+                </div>
+              </section>
+            </>
+          ) : null}
+
+          {workspaceStep === "export" ? (
+            <>
+              <section className="panel-card workspace-card">
+                <div className="workspace-card-head">
+                  <div>
+                    <h2>Export figure</h2>
+                    <p className="helper-text">Preview the final layout, tune spacing, and export SVG, PNG, or PDF.</p>
+                  </div>
+                  <span className="help-dot" aria-label={sectionHelp.project} data-tip={sectionHelp.project} tabIndex={0}>?</span>
+                </div>
+                <div className="inline-actions export-button-row">
+                  <button className="primary-button" onClick={() => handleExport("svg")}>SVG</button>
+                  <button className="secondary-button" onClick={() => handleExport("png")}>PNG</button>
+                  <button className="secondary-button" onClick={() => handleExport("pdf")}>PDF</button>
+                </div>
+                <div className="workflow-toggles">
+                  <label className="toggle-row compact-toggle">
                     <span>Print preview</span>
                     <input type="checkbox" checked={previewExport} onChange={(event) => setPreviewExport(event.target.checked)} />
                   </label>
                   <button className={focusMode ? "secondary-button active-toggle" : "secondary-button"} onClick={() => setFocusMode((current) => !current)}>
-                    <span className="toolbar-chip-icon" aria-hidden="true">{focusMode ? "⤢" : "⛶"}</span>
-                    {focusMode ? "Exit focus" : "Focus"}
+                    {focusMode ? "Exit focus" : "Focus mode"}
                   </button>
                 </div>
-                <div className="toolbar-actions">
-                  <button className="primary-button" onClick={() => handleExport("svg")}>
-                    <span className="toolbar-chip-icon" aria-hidden="true">⌘</span>
-                    SVG
-                  </button>
-                  <button className="secondary-button" onClick={() => handleExport("png")}>
-                    <span className="toolbar-chip-icon" aria-hidden="true">▣</span>
-                    PNG
-                  </button>
-                  <button className="secondary-button" onClick={() => handleExport("pdf")}>
-                    <span className="toolbar-chip-icon" aria-hidden="true">▤</span>
-                    PDF
-                  </button>
+                <label className="field-label">
+                  Export preset
+                  <div className="segmented">
+                    {(["paper", "slide", "poster"] as const).map((preset) => (
+                      <button
+                        key={preset}
+                        className={exportPreset === preset ? "segment-button active" : "segment-button"}
+                        onClick={() => applyExportPreset(preset)}
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="helper-text">
+                    {exportPreset === "custom" ? "Custom export settings" : `${exportPreset} preset active`}
+                  </span>
+                </label>
+                <label className="field-label">
+                  Print columns
+                  <input
+                    type="range"
+                    min="40"
+                    max="80"
+                    step="5"
+                    value={printColumns}
+                    onChange={(event) => {
+                      markExportPresetCustom();
+                      setPrintColumns(Number(event.target.value));
+                    }}
+                  />
+                  <span className="helper-text">{printColumns} residues per row</span>
+                </label>
+                <label className="field-label">
+                  Print spacing
+                  <input
+                    type="range"
+                    min="0.85"
+                    max="1.2"
+                    step="0.05"
+                    value={printSpacing}
+                    onChange={(event) => {
+                      markExportPresetCustom();
+                      setPrintSpacing(Number(event.target.value));
+                    }}
+                  />
+                  <span className="helper-text">{printSpacing.toFixed(2)}x spacing</span>
+                </label>
+                <label className="field-label">
+                  Raster scale
+                  <input
+                    type="range"
+                    min="1"
+                    max="4"
+                    step="1"
+                    value={exportScale}
+                    onChange={(event) => {
+                      markExportPresetCustom();
+                      setExportScale(Number(event.target.value));
+                    }}
+                  />
+                  <span className="helper-text">{exportScale}x PNG/PDF resolution</span>
+                </label>
+                <label className="field-label">
+                  PDF quality
+                  <input
+                    type="range"
+                    min="0.75"
+                    max="1"
+                    step="0.05"
+                    value={pdfQuality}
+                    onChange={(event) => {
+                      markExportPresetCustom();
+                      setPdfQuality(Number(event.target.value));
+                    }}
+                  />
+                  <span className="helper-text">{Math.round(pdfQuality * 100)}% JPEG quality in PDF</span>
+                </label>
+              </section>
+
+              <section className="panel-card workspace-card">
+                <div className="workspace-card-head">
+                  <div>
+                    <h2>Legend and project</h2>
+                    <p className="helper-text">Control the legend, then save or reopen a project without changing the exported format.</p>
+                  </div>
                 </div>
-              </div>
-            </div>
-          </div>
-
-          {showToolTray ? (
-            <div className="panel-card tool-tray-card">
-              <div className="section-heading">
-                <h2>Tool library</h2>
-                <button className="secondary-button" onClick={() => setShowToolTray(false)}>
-                  Close
-                </button>
-              </div>
-              <div className="tool-grid tool-grid--tray">
-                {toolOptions.map((tool) => (
-                  <button
-                    key={`tray-${tool.id}`}
-                    className={tool.id === activeTool ? "tool-button active" : "tool-button"}
-                    onClick={() => {
-                      setActiveTool(tool.id);
-                      setShowToolTray(false);
+                <label className="toggle-row">
+                  <span>Show legend</span>
+                  <input
+                    type="checkbox"
+                    checked={showLegend}
+                    onChange={(event) => {
+                      markExportPresetCustom();
+                      setShowLegend(event.target.checked);
                     }}
-                    data-tone={toolMeta[tool.id].tone}
-                  >
-                    <span className="tool-icon" aria-hidden="true">
-                      {toolIcons[tool.id]}
-                    </span>
-                    <span>{tool.label}</span>
-                    <span className="tool-caption">{toolMeta[tool.id].hint}</span>
+                  />
+                </label>
+                {showLegend ? (
+                  <>
+                    <label className="toggle-row">
+                      <span>Include standard legend</span>
+                      <input
+                        type="checkbox"
+                        checked={includeAutoLegend}
+                        onChange={(event) => setIncludeAutoLegend(event.target.checked)}
+                      />
+                    </label>
+                    <div className="legend-editor">
+                      <div className="section-heading">
+                        <h3>Custom legend items</h3>
+                        <button className="secondary-button" onClick={addLegendItem}>
+                          Add item
+                        </button>
+                      </div>
+                      {customLegendItems.length === 0 ? (
+                        <p className="helper-text">Add figure-specific legend rows for motifs, annotations, or custom callouts.</p>
+                      ) : (
+                        <div className="legend-list">
+                          {customLegendItems.map((item) => (
+                            <div key={item.id} className="legend-row">
+                              <input
+                                className="text-field"
+                                value={item.label}
+                                onChange={(event) =>
+                                  setCustomLegendItems((current) =>
+                                    current.map((entry) =>
+                                      entry.id === item.id ? { ...entry, label: event.target.value } : entry,
+                                    ),
+                                  )
+                                }
+                                placeholder="Legend label"
+                              />
+                              <select
+                                className="text-field"
+                                value={item.style}
+                                onChange={(event) =>
+                                  setCustomLegendItems((current) =>
+                                    current.map((entry) =>
+                                      entry.id === item.id
+                                        ? { ...entry, style: event.target.value as CustomLegendItem["style"] }
+                                        : entry,
+                                    ),
+                                  )
+                                }
+                              >
+                                <option value="fill">Fill</option>
+                                <option value="outline">Outline</option>
+                                <option value="text">Text</option>
+                              </select>
+                              <input
+                                className="toolbar-color"
+                                type="color"
+                                value={item.color}
+                                onChange={(event) =>
+                                  setCustomLegendItems((current) =>
+                                    current.map((entry) =>
+                                      entry.id === item.id ? { ...entry, color: event.target.value } : entry,
+                                    ),
+                                  )
+                                }
+                              />
+                              <button
+                                className="layer-action"
+                                onClick={() => setCustomLegendItems((current) => current.filter((entry) => entry.id !== item.id))}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : null}
+                <div className="inline-actions export-actions">
+                  <button className="secondary-button" onClick={saveProject}>
+                    Save project JSON
                   </button>
-                ))}
-              </div>
-            </div>
+                  <label className="file-button">
+                    Load project JSON
+                    <input type="file" accept=".json,application/json" onChange={handleProjectUpload} />
+                  </label>
+                </div>
+              </section>
+            </>
           ) : null}
+        </aside>
 
-        <div className="status-bar">
-          <span>{status}</span>
-          {alignment ? (
-            <span>
-              {alignment.name} · {alignment.sequences.length} sequences · {alignment.alignmentLength} columns
-            </span>
-          ) : null}
-        </div>
+        <main className="canvas-panel">
+          <section className="panel-card workspace-banner">
+            <div>
+              <p className="eyebrow workflow-eyebrow">Current step</p>
+              <h2>{workflowSteps.find((step) => step.id === workspaceStep)?.label}</h2>
+              <p className="helper-text">{workflowSteps.find((step) => step.id === workspaceStep)?.description}</p>
+            </div>
+            <div className="workspace-banner-meta">
+              <span className="workspace-pill">Tool: {toolOptions.find((tool) => tool.id === activeTool)?.label}</span>
+              {previewExport ? <span className="workspace-pill">Print preview</span> : null}
+              {focusMode ? <span className="workspace-pill">Focus mode</span> : null}
+            </div>
+          </section>
 
-        {selectedAnnotation ? (
-          <div className="panel-card inspector-card">
-            <div className="section-heading">
-              <h2>Selection</h2>
-              <span className="inspector-tag">{selectedAnnotation.type.replace("-", " ")}</span>
-            </div>
-            <div className="inspector-actions">
-              <button className="secondary-button" onClick={() => duplicateAnnotation(selectedAnnotation.id)}>
-                Duplicate
-              </button>
-              <button
-                className={selectedAnnotation.locked ? "secondary-button active-toggle" : "secondary-button"}
-                onClick={() =>
-                  setAnnotations((current) =>
-                    current.map((annotation) =>
-                      annotation.id === selectedAnnotation.id ? { ...annotation, locked: !annotation.locked } : annotation,
-                    ),
-                  )
-                }
-              >
-                {selectedAnnotation.locked ? "Locked" : "Lock"}
-              </button>
-            </div>
-            <div className="inspector-grid">
-              <label className="field-label">
-                Name
-                <input
-                  className="text-field"
-                  value={selectedAnnotation.label ?? ""}
-                  onChange={(event) => {
-                    const nextLabel = event.target.value;
-                    updateSelectedAnnotation((annotation) => ({ ...annotation, label: nextLabel }));
-                  }}
-                />
-              </label>
-              <label className="field-label">
-                Color
-                <input
-                  className="toolbar-color"
-                  type="color"
-                  value={selectedAnnotation.color}
-                  onChange={(event) => {
-                    const nextColor = event.target.value;
-                    setColor(nextColor);
-                    updateSelectedAnnotation((annotation) => ({ ...annotation, color: nextColor }));
-                  }}
-                />
-              </label>
-              {selectedAnnotation.type === "text" ? (
-                <label className="field-label">
-                  Label
-                  <input
-                    className="text-field"
-                    value={selectedAnnotation.text}
-                    onChange={(event) => {
-                      const nextValue = event.target.value;
-                      setTextValue(nextValue);
-                      updateSelectedAnnotation((annotation) =>
-                        annotation.type === "text" ? { ...annotation, text: nextValue || starterText } : annotation,
-                      );
-                    }}
-                  />
-                </label>
-              ) : null}
-              {"selection" in selectedAnnotation &&
-              (selectedAnnotation.type === "triangle-up" ||
-                selectedAnnotation.type === "triangle-down" ||
-                selectedAnnotation.type === "arrow-down" ||
-                selectedAnnotation.type === "circle" ||
-                selectedAnnotation.type === "open-circle" ||
-                selectedAnnotation.type === "star" ||
-                selectedAnnotation.type === "arrow" ||
-                selectedAnnotation.type === "bracket") ? (
-                <label className="field-label">
-                  Marker size
-                  <input
-                    type="range"
-                    min="0.7"
-                    max="1.8"
-                    step="0.1"
-                    value={selectedAnnotation.size ?? 1}
-                    onChange={(event) => {
-                      const nextSize = Number(event.target.value);
-                      updateSelectedAnnotation((annotation) =>
-                        "selection" in annotation &&
-                        (annotation.type === "triangle-up" ||
-                          annotation.type === "triangle-down" ||
-                          annotation.type === "arrow-down" ||
-                          annotation.type === "circle" ||
-                          annotation.type === "open-circle" ||
-                          annotation.type === "star" ||
-                          annotation.type === "arrow" ||
-                          annotation.type === "bracket")
-                          ? { ...annotation, size: nextSize }
-                          : annotation,
-                      );
-                    }}
-                  />
-                </label>
-              ) : null}
-              {"selection" in selectedAnnotation &&
-              (selectedAnnotation.type === "arrow" ||
-                selectedAnnotation.type === "bracket" ||
-                selectedAnnotation.type === "arrow-down") ? (
-                <label className="field-label">
-                  Placement
-                  <select
-                    className="text-field"
-                    value={selectedAnnotation.placement ?? "top"}
-                    onChange={(event) => {
-                      const placement = event.target.value as "top" | "bottom";
-                      updateSelectedAnnotation((annotation) =>
-                        "selection" in annotation &&
-                        (annotation.type === "arrow" || annotation.type === "bracket" || annotation.type === "arrow-down")
-                          ? { ...annotation, placement }
-                          : annotation,
-                      );
-                    }}
-                  >
-                    <option value="top">Top</option>
-                    <option value="bottom">Bottom</option>
-                  </select>
-                </label>
-              ) : null}
-              {selectedAnnotation.type === "bridge" ? (
-                <label className="field-label">
-                  Bridge style
-                  <select
-                    className="text-field"
-                    value={selectedAnnotation.style ?? "bracket"}
-                    onChange={(event) => {
-                      const style = event.target.value as "bracket" | "arch";
-                      updateSelectedAnnotation((annotation) =>
-                        annotation.type === "bridge" ? { ...annotation, style } : annotation,
-                      );
-                    }}
-                  >
-                    <option value="bracket">Bracket</option>
-                    <option value="arch">Arch</option>
-                  </select>
-                </label>
-              ) : null}
-              {selectedAnnotation.type === "bridge" ? (
-                <label className="field-label">
-                  Placement
-                  <select
-                    className="text-field"
-                    value={selectedAnnotation.placement ?? "top"}
-                    onChange={(event) => {
-                      const placement = event.target.value as "top" | "bottom";
-                      updateSelectedAnnotation((annotation) =>
-                        annotation.type === "bridge" ? { ...annotation, placement } : annotation,
-                      );
-                    }}
-                  >
-                    <option value="top">Top</option>
-                    <option value="bottom">Bottom</option>
-                  </select>
-                </label>
-              ) : null}
-              {selectedAnnotation.type === "bridge" ? (
-                <label className="field-label">
-                  Bridge height
-                  <input
-                    type="range"
-                    min="0.8"
-                    max="2.2"
-                    step="0.1"
-                    value={selectedAnnotation.height ?? 1}
-                    onChange={(event) => {
-                      const height = Number(event.target.value);
-                      updateSelectedAnnotation((annotation) =>
-                        annotation.type === "bridge" ? { ...annotation, height } : annotation,
-                      );
-                    }}
-                  />
-                </label>
-              ) : null}
-            </div>
+          <div className="status-bar">
+            <span>{status}</span>
+            {alignment ? (
+              <span>
+                {alignment.name} · {alignment.sequences.length} sequences · {alignment.alignmentLength} columns
+              </span>
+            ) : null}
           </div>
-        ) : null}
 
-        <div className="canvas-card">
-          {alignment ? (
-            <AlignmentCanvas
-              ref={editorSvgRef}
-              alignment={alignment}
-              annotations={annotations}
-              metrics={previewExport ? exportMetrics ?? createLayoutMetrics(alignment, "export") : editorMetrics ?? createLayoutMetrics(alignment, "editor")}
-              renderMode={previewExport ? "export" : "editor"}
-              visualizationMode={visualizationMode}
-              espriptPreset={espriptPreset}
-              conservationColors={useCustomConservationColors ? conservationColors : null}
-              showConservationStrip={showConservationStrip}
-              showLegend={showLegend}
-              includeAutoLegend={includeAutoLegend}
-              customLegendItems={customLegendItems}
-              secondaryStructureTrack={secondaryStructureTrack}
-              bottomStructureTrack={bottomStructureTrack}
-              boxStrokeWidth={boxStrokeWidth}
-              pendingBridgeAnchor={pendingBridgeAnchor}
-              interactive
-              selection={selection}
-              activeTool={activeTool}
-              dragState={dragState}
-              onCellPointerDown={handleCellPointerDown}
-              onCellPointerEnter={handleCellPointerEnter}
-              onAnnotationPointerDown={handleAnnotationPointerDown}
-              selectedAnnotationId={selectedAnnotationId}
-            />
-          ) : (
-            <div className="empty-state">Load an alignment to begin.</div>
-          )}
-        </div>
+          <div className="canvas-card">
+            {alignment ? (
+              <AlignmentCanvas
+                ref={editorSvgRef}
+                alignment={alignment}
+                annotations={annotations}
+                metrics={previewExport ? exportMetrics ?? createLayoutMetrics(alignment, "export") : editorMetrics ?? createLayoutMetrics(alignment, "editor")}
+                renderMode={previewExport ? "export" : "editor"}
+                visualizationMode={visualizationMode}
+                espriptPreset={espriptPreset}
+                conservationColors={useCustomConservationColors ? conservationColors : null}
+                showConservationStrip={showConservationStrip}
+                showLegend={showLegend}
+                includeAutoLegend={includeAutoLegend}
+                customLegendItems={customLegendItems}
+                structureRenderStyle={structureRenderStyle}
+                secondaryStructureTrack={secondaryStructureTrack}
+                bottomStructureTrack={bottomStructureTrack}
+                boxStrokeWidth={boxStrokeWidth}
+                pendingBridgeAnchor={pendingBridgeAnchor}
+                interactive
+                selection={selection}
+                activeTool={activeTool}
+                dragState={dragState}
+                onCellPointerDown={handleCellPointerDown}
+                onCellPointerEnter={handleCellPointerEnter}
+                onAnnotationPointerDown={handleAnnotationPointerDown}
+                selectedAnnotationId={selectedAnnotationId}
+              />
+            ) : (
+              <div className="empty-state">Load an alignment to begin.</div>
+            )}
+          </div>
 
-        {!focusMode ? (
-        <article className="note-card compact-note">
-          <p>
-            Annotations are stored in alignment coordinates, so they stay attached on redraw and export. Delete removes the selected annotation, Cmd/Ctrl+Z removes the last one, and project JSON lets you reopen a figure later.
-          </p>
-        </article>
-        ) : null}
+          {!focusMode ? (
+          <article className="note-card compact-note">
+            <p>
+              Annotations are stored in alignment coordinates, so they stay attached on redraw and export. Delete removes the selected annotation, Cmd/Ctrl+Z removes the last one, and project JSON lets you reopen a figure later.
+            </p>
+          </article>
+          ) : null}
         </main>
       </div>
       ) : (
@@ -1988,6 +2008,7 @@ export default function App() {
             showLegend={showLegend}
             includeAutoLegend={includeAutoLegend}
             customLegendItems={customLegendItems}
+            structureRenderStyle={structureRenderStyle}
             secondaryStructureTrack={secondaryStructureTrack}
             bottomStructureTrack={bottomStructureTrack}
             boxStrokeWidth={boxStrokeWidth}

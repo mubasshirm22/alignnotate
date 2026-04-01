@@ -108,6 +108,7 @@ export type VisualizationMode =
   | "residue";
 
 export type EspriptPreset = "classic" | "flashy" | "identity";
+export type StructureRenderStyle = "classic" | "ssdraw" | "protopo";
 
 export type ConservationColorOverrides = {
   strict: string;

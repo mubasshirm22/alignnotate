@@ -12,6 +12,7 @@ import type {
   RenderMode,
   SecondaryStructureTrack,
   Selection,
+  StructureRenderStyle,
   Tool,
   VisualizationMode,
 } from "./types";
@@ -33,6 +34,7 @@ type Props = {
   showLegend: boolean;
   includeAutoLegend: boolean;
   customLegendItems: CustomLegendItem[];
+  structureRenderStyle: StructureRenderStyle;
   secondaryStructureTrack: SecondaryStructureTrack | null;
   bottomStructureTrack: SecondaryStructureTrack | null;
   boxStrokeWidth: number;
@@ -72,6 +74,7 @@ export const AlignmentCanvas = forwardRef<SVGSVGElement, Props>(function Alignme
     showLegend,
     includeAutoLegend,
     customLegendItems,
+    structureRenderStyle,
     secondaryStructureTrack,
     bottomStructureTrack,
     boxStrokeWidth,
@@ -193,6 +196,7 @@ export const AlignmentCanvas = forwardRef<SVGSVGElement, Props>(function Alignme
             conservationColors,
             highlightColors,
             showConservationStrip,
+            structureRenderStyle,
             secondaryStructureTrack,
             bottomStructureTrack,
             interactive,
@@ -229,6 +233,7 @@ function renderBlock(
   conservationColors: ConservationColorOverrides | null,
   highlightColors: Map<string, string>,
   showConservationStrip: boolean,
+  structureRenderStyle: StructureRenderStyle,
   secondaryStructureTrack: SecondaryStructureTrack | null,
   bottomStructureTrack: SecondaryStructureTrack | null,
   interactive: boolean,
@@ -245,9 +250,9 @@ function renderBlock(
         <rect x={gridX} y={0} width={gridWidth} height={block.height - 6} fill="#ffffff" />
       ) : null}
 
-      {secondaryStructureTrack ? renderStructureTrack(secondaryStructureTrack, block, gridX, metrics, renderMode, "top") : null}
+      {secondaryStructureTrack ? renderStructureTrack(secondaryStructureTrack, block, gridX, metrics, renderMode, "top", structureRenderStyle) : null}
       {bottomStructureTrack
-        ? renderStructureTrack(bottomStructureTrack, block, gridX, metrics, renderMode, "bottom", bottomTrackY)
+        ? renderStructureTrack(bottomStructureTrack, block, gridX, metrics, renderMode, "bottom", structureRenderStyle, bottomTrackY)
         : null}
 
       {renderMode === "editor" ? (
@@ -1229,14 +1234,15 @@ function renderStructureTrack(
   metrics: LayoutMetrics,
   renderMode: RenderMode,
   placement: "top" | "bottom",
+  style: StructureRenderStyle,
   forcedLaneY?: number,
 ) {
-  const topY = placement === "top" ? (renderMode === "export" ? 6 : 8) : (forcedLaneY ?? 0);
   const laneY = placement === "top" ? (renderMode === "export" ? 16 : 18) : (forcedLaneY ?? 0) + 8;
+  const labelY = placement === "top" ? laneY + (renderMode === "export" ? 2 : 3) : laneY + 5;
   let helixCount = countTrackSegmentsBefore(track.residues, block.startColumn, "H");
   let strandCount = countTrackSegmentsBefore(track.residues, block.startColumn, "E");
   const elements: ReactElement[] = [
-    <text key={`track_label_${block.blockIndex}`} x={metrics.padding} y={topY + 11} className="track-label">
+    <text key={`track_label_${block.blockIndex}`} x={metrics.padding} y={labelY} className="track-label">
       {track.label}
     </text>,
   ];
@@ -1256,10 +1262,19 @@ function renderStructureTrack(
 
     const x = gridX + (index - block.startColumn) * metrics.cellWidth;
     const width = (end - index + 1) * metrics.cellWidth;
+    const residueCount = end - index + 1;
+    const previousSymbol = classifyTrackSymbol(track.residues[index - 1] ?? "C");
+    const nextSymbol = classifyTrackSymbol(track.residues[end + 1] ?? "C");
 
     if (symbol === "H") {
       helixCount += 1;
-      elements.push(...helixCoilGroup(block.blockIndex, index, x, laneY, width, renderMode));
+      elements.push(
+        ...(style === "ssdraw"
+          ? helixSsDrawGroup(block.blockIndex, index, x, laneY, width, residueCount, renderMode)
+          : style === "protopo"
+            ? protopoHelix(block.blockIndex, index, x, laneY, width, renderMode)
+            : helixCoilGroup(block.blockIndex, index, x, laneY, width, renderMode)),
+      );
       elements.push(
         <text
           key={`helix_label_${block.blockIndex}_${index}`}
@@ -1273,10 +1288,13 @@ function renderStructureTrack(
       );
     } else if (symbol === "E") {
       strandCount += 1;
-      const tip = x + width;
-      const arrowBody = Math.max(width - 10, 2);
-      const points = `${x},${laneY + 2} ${x + arrowBody},${laneY + 2} ${tip},${laneY + 5} ${x + arrowBody},${laneY + 8} ${x},${laneY + 8}`;
-      elements.push(<polygon key={`strand_${block.blockIndex}_${index}`} points={points} fill="#111111" opacity={0.95} />);
+      elements.push(
+        style === "ssdraw"
+          ? ssdrawStrand(block.blockIndex, index, x, laneY, width, residueCount, renderMode, nextSymbol)
+          : style === "protopo"
+            ? protopoStrand(block.blockIndex, index, x, laneY, width, renderMode)
+            : classicStrand(block.blockIndex, index, x, laneY, width),
+      );
       elements.push(
         <text
           key={`strand_label_${block.blockIndex}_${index}`}
@@ -1290,15 +1308,21 @@ function renderStructureTrack(
       );
     } else {
       elements.push(
-        <text
-          key={`turn_${block.blockIndex}_${index}`}
-          x={x + width / 2}
-          y={laneY + 7}
-          textAnchor="middle"
-          className="track-turn-label"
-        >
-          TT
-        </text>,
+        style === "ssdraw"
+          ? ssdrawLoop(block.blockIndex, index, x, laneY, width, residueCount, renderMode, previousSymbol, nextSymbol)
+          : style === "protopo"
+            ? protopoLinker(block.blockIndex, index, x, laneY, width, renderMode)
+          : (
+            <text
+              key={`turn_${block.blockIndex}_${index}`}
+              x={x + width / 2}
+              y={laneY + 7}
+              textAnchor="middle"
+              className="track-turn-label"
+            >
+              TT
+            </text>
+          ),
       );
     }
 
@@ -1306,6 +1330,13 @@ function renderStructureTrack(
   }
 
   return <g>{elements}</g>;
+}
+
+function classicStrand(blockIndex: number, index: number, x: number, laneY: number, width: number): ReactElement {
+  const tip = x + width;
+  const arrowBody = Math.max(width - 10, 2);
+  const points = `${x},${laneY + 2} ${x + arrowBody},${laneY + 2} ${tip},${laneY + 5} ${x + arrowBody},${laneY + 8} ${x},${laneY + 8}`;
+  return <polygon key={`strand_${blockIndex}_${index}`} points={points} fill="#111111" opacity={0.95} />;
 }
 
 function classifyTrackSymbol(symbol: string): "H" | "E" | "T" | null {
@@ -1324,44 +1355,297 @@ function helixCoilGroup(
   width: number,
   renderMode: RenderMode,
 ): ReactElement[] {
-  const radiusX = renderMode === "export" ? 3.15 : 3.6;
-  const radiusY = renderMode === "export" ? 3.7 : 4.15;
-  const pitch = radiusX * 1.55;
-  const clipId = `helix_clip_${blockIndex}_${index}_${renderMode}`;
-  const baselineY = laneY + radiusY * 0.18;
-  const elements: ReactElement[] = [
-    <clipPath key={`${clipId}_clip`} id={clipId}>
-      <rect x={x} y={laneY - radiusY - 0.7} width={width} height={radiusY * 1.22} />
-    </clipPath>,
-  ];
+  const amplitude = renderMode === "export" ? 3.9 : 4.4;
+  const period = renderMode === "export" ? 7.8 : 8.6;
+  const baselineY = laneY + (renderMode === "export" ? 3.5 : 3.9);
+  const halfPeriod = period / 2;
+  let cursor = x;
+  let direction = -1;
+  let path = `M ${x.toFixed(2)} ${baselineY.toFixed(2)}`;
 
-  const coils: ReactElement[] = [];
-  let cursor = x - radiusX * 0.88;
-  let coil = 0;
-  while (cursor <= x + width + radiusX) {
-    coils.push(
-      <ellipse
-        key={`${clipId}_${coil}`}
-        cx={cursor + radiusX}
-        cy={baselineY}
-        rx={radiusX}
-        ry={radiusY}
-        fill="none"
-        stroke="#5f6b7a"
-        strokeWidth={renderMode === "export" ? 1.12 : 1.26}
-      />,
-    );
-    cursor += pitch;
-    coil += 1;
+  while (cursor < x + width) {
+    const controlX = Math.min(cursor + halfPeriod / 2, x + width);
+    const nextX = Math.min(cursor + halfPeriod, x + width);
+    const controlY = baselineY + amplitude * direction;
+    path += ` Q ${controlX.toFixed(2)} ${controlY.toFixed(2)} ${nextX.toFixed(2)} ${baselineY.toFixed(2)}`;
+    cursor += halfPeriod;
+    direction *= -1;
   }
 
-  elements.push(
-    <g key={`${clipId}_coils`} clipPath={`url(#${clipId})`}>
-      {coils}
-    </g>,
+  return [
+    <path
+      key={`helix_wave_${blockIndex}_${index}`}
+      d={path}
+      fill="none"
+      stroke="#596474"
+      strokeWidth={renderMode === "export" ? 1.18 : 1.34}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />,
+  ];
+}
+
+function helixSsDrawGroup(
+  blockIndex: number,
+  index: number,
+  x: number,
+  laneY: number,
+  width: number,
+  residueCount: number,
+  renderMode: RenderMode,
+): ReactElement[] {
+  const residues = Math.max(1, residueCount);
+  const unit = width / residues;
+  const scale = renderMode === "export" ? 5.6 : 6.1;
+  const front = "#98a4b5";
+  const back = "#d6dce5";
+  const stroke = "#4a5565";
+  const strokeWidth = renderMode === "export" ? 0.6 : 0.72;
+
+  // Geometry ported from SSDraw's build_helix() and translated into SVG coordinates.
+  const y = (value: number) => laneY - value * scale;
+  const xPos = (value: number) => x + value * unit;
+  const polygons: ReactElement[] = [];
+
+  const pushPolygon = (points: [number, number][], fill: string, key: string) => {
+    polygons.push(
+      <polygon
+        key={key}
+        points={points.map(([px, py]) => `${px},${py}`).join(" ")}
+        fill={fill}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+        strokeLinejoin="miter"
+      />,
+    );
+  };
+
+  if (residues <= 2) {
+    pushPolygon(
+      [
+        [xPos(0), y(-0.25)],
+        [xPos(1), y(0.75)],
+        [xPos(residues), y(0.75)],
+        [xPos(Math.max(0, residues - 1)), y(-0.25)],
+      ],
+      back,
+      `ssdraw_helix_short_${blockIndex}_${index}`,
+    );
+    return polygons;
+  }
+
+  pushPolygon(
+    [
+      [xPos(0), y(-0.25)],
+      [xPos(1), y(0.75)],
+      [xPos(2), y(0.75)],
+      [xPos(1), y(-0.25)],
+    ],
+    back,
+    `ssdraw_helix_start_${blockIndex}_${index}`,
   );
 
-  return elements;
+  for (let j = 0; j < residues - 3; j += 1) {
+    if (j % 2 === 0) {
+      pushPolygon(
+        [
+          [xPos(1 + j), y(0.75)],
+          [xPos(2 + j), y(0.75)],
+          [xPos(3 + j), y(-0.75)],
+          [xPos(2 + j), y(-0.75)],
+        ],
+        front,
+        `ssdraw_helix_front_${blockIndex}_${index}_${j}`,
+      );
+    } else {
+      pushPolygon(
+        [
+          [xPos(1 + j), y(-0.75)],
+          [xPos(2 + j), y(-0.75)],
+          [xPos(3 + j), y(0.75)],
+          [xPos(2 + j), y(0.75)],
+        ],
+        back,
+        `ssdraw_helix_back_${blockIndex}_${index}_${j}`,
+      );
+    }
+  }
+
+  if ((residues - 3) % 2 === 1) {
+    pushPolygon(
+      [
+        [xPos(residues - 1), y(-0.75)],
+        [xPos(residues), y(-0.75)],
+        [xPos(residues + 1), y(0.25)],
+        [xPos(residues), y(0.25)],
+      ],
+      back,
+      `ssdraw_helix_end_back_${blockIndex}_${index}`,
+    );
+  } else {
+    pushPolygon(
+      [
+        [xPos(residues - 1), y(0.75)],
+        [xPos(residues), y(0.75)],
+        [xPos(residues + 1), y(-0.25)],
+        [xPos(residues), y(-0.25)],
+      ],
+      front,
+      `ssdraw_helix_end_front_${blockIndex}_${index}`,
+    );
+  }
+
+  return polygons;
+}
+
+function ssdrawStrand(
+  blockIndex: number,
+  index: number,
+  x: number,
+  laneY: number,
+  width: number,
+  residueCount: number,
+  renderMode: RenderMode,
+  nextSymbol: "H" | "E" | "T" | null,
+): ReactElement {
+  const residues = Math.max(1, residueCount);
+  const unit = width / residues;
+  const headLength = unit * 2;
+  const delta = nextSymbol === null ? 0 : 1;
+  const startX = x + (delta - 1) * unit;
+  const tip = startX + width;
+  const yMid = laneY + (renderMode === "export" ? 4.15 : 4.55);
+  const halfHeight = renderMode === "export" ? 3.25 : 3.7;
+  const bodyEnd = Math.max(startX + unit * 1.1, tip - headLength);
+  const points = `${startX},${yMid - halfHeight} ${bodyEnd},${yMid - halfHeight} ${tip},${yMid} ${bodyEnd},${yMid + halfHeight} ${startX},${yMid + halfHeight}`;
+  return (
+    <polygon
+      key={`ssdraw_strand_${blockIndex}_${index}`}
+      points={points}
+      fill="#d7dde6"
+      stroke="#4a5565"
+      strokeWidth={renderMode === "export" ? 0.58 : 0.72}
+      strokeLinejoin="miter"
+    />
+  );
+}
+
+function ssdrawLoop(
+  blockIndex: number,
+  index: number,
+  x: number,
+  laneY: number,
+  width: number,
+  residueCount: number,
+  renderMode: RenderMode,
+  previousSymbol: "H" | "E" | "T" | null,
+  nextSymbol: "H" | "E" | "T" | null,
+): ReactElement {
+  const residues = Math.max(1, residueCount);
+  const unit = width / residues;
+  let startX = x;
+  if (previousSymbol && previousSymbol !== "E") {
+    startX -= unit;
+  } else if (!previousSymbol) {
+    startX += unit * 0.06;
+  }
+
+  let endX = x + width + unit * 0.33;
+  if (nextSymbol === "E") {
+    endX = x + width - unit * 0.25;
+  } else if (nextSymbol === null) {
+    endX = x + width - unit * 0.68;
+  }
+
+  const barHeight = renderMode === "export" ? 2.05 : 2.35;
+  const y = laneY + (renderMode === "export" ? 3.9 : 4.35);
+  return (
+    <rect
+      key={`ssdraw_loop_${blockIndex}_${index}`}
+      x={startX}
+      y={y}
+      width={Math.max(unit * 0.4, endX - startX)}
+      height={barHeight}
+      rx={barHeight / 2}
+      fill="#d8dee7"
+      stroke="#4a5565"
+      strokeWidth={renderMode === "export" ? 0.48 : 0.58}
+    />
+  );
+}
+
+function protopoHelix(
+  blockIndex: number,
+  index: number,
+  x: number,
+  laneY: number,
+  width: number,
+  renderMode: RenderMode,
+): ReactElement[] {
+  const height = renderMode === "export" ? 8.4 : 9.2;
+  const y = laneY + (renderMode === "export" ? 0.6 : 0.9);
+  return [
+    <rect
+      key={`protopo_helix_${blockIndex}_${index}`}
+      x={x}
+      y={y}
+      width={width}
+      height={height}
+      fill="#b67457"
+      stroke="#3f2a1f"
+      strokeWidth={renderMode === "export" ? 0.65 : 0.78}
+      rx={height * 0.2}
+    />,
+  ];
+}
+
+function protopoStrand(
+  blockIndex: number,
+  index: number,
+  x: number,
+  laneY: number,
+  width: number,
+  renderMode: RenderMode,
+): ReactElement {
+  const yMid = laneY + (renderMode === "export" ? 4.85 : 5.25);
+  const bodyHalf = renderMode === "export" ? 2.75 : 3.05;
+  const headLength = Math.min(Math.max(width * 0.22, 9), 16);
+  const bodyEnd = Math.max(x + width * 0.42, x + width - headLength);
+  const tip = x + width;
+  const points = `${x},${yMid - bodyHalf} ${bodyEnd},${yMid - bodyHalf} ${tip},${yMid} ${bodyEnd},${yMid + bodyHalf} ${x},${yMid + bodyHalf}`;
+  return (
+    <polygon
+      key={`protopo_strand_${blockIndex}_${index}`}
+      points={points}
+      fill="#73a96a"
+      stroke="#244327"
+      strokeWidth={renderMode === "export" ? 0.65 : 0.8}
+      strokeLinejoin="miter"
+    />
+  );
+}
+
+function protopoLinker(
+  blockIndex: number,
+  index: number,
+  x: number,
+  laneY: number,
+  width: number,
+  renderMode: RenderMode,
+): ReactElement {
+  const y = laneY + (renderMode === "export" ? 5.1 : 5.5);
+  return (
+    <line
+      key={`protopo_linker_${blockIndex}_${index}`}
+      x1={x}
+      x2={x + width}
+      y1={y}
+      y2={y}
+      stroke="#4b5563"
+      strokeWidth={renderMode === "export" ? 1.6 : 1.9}
+      strokeLinecap="round"
+    />
+  );
 }
 
 function countTrackSegmentsBefore(residues: string, endExclusive: number, symbol: "H" | "E"): number {
