@@ -77,6 +77,8 @@ export type TextAnnotation = AnnotationBase & {
   dy: number;
   boxed?: boolean;
   connector?: boolean;
+  fontSize?: number;
+  textColor?: string;
 };
 
 export type Annotation = RegionAnnotation | MarkerAnnotation | TextAnnotation | BridgeAnnotation;

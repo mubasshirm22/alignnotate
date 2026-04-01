@@ -909,6 +909,10 @@ function renderAnnotation(
       const anchorY = anchorBlock.rowY[annotation.selection.startSequence] - 6;
       const labelX = anchorX + annotation.dx;
       const labelY = anchorY + annotation.dy;
+      const fontSize = annotation.fontSize ?? 13;
+      const textColor = annotation.textColor ?? annotation.color;
+      const textWidth = annotation.text.length * fontSize * 0.62 + 12;
+      const boxHeight = fontSize + 7;
 
       elements.push(
         <g
@@ -917,21 +921,21 @@ function renderAnnotation(
           onPointerDown={(event) => onAnnotationPointerDown(annotation.id, event.clientX, event.clientY)}
         >
           {annotation.connector !== false ? (
-            <line x1={anchorX} y1={anchorY} x2={labelX} y2={labelY - 10} stroke={annotation.color} strokeWidth={1.1} />
+            <line x1={anchorX} y1={anchorY} x2={labelX} y2={labelY - fontSize * 0.82} stroke={annotation.color} strokeWidth={1.1} />
           ) : null}
           {annotation.boxed !== false ? (
             <rect
               x={labelX - 6}
-              y={labelY - 22}
-              width={annotation.text.length * 7.5 + 12}
-              height={18}
+              y={labelY - (boxHeight + 4)}
+              width={textWidth}
+              height={boxHeight}
               rx={renderMode === "editor" ? 8 : 0}
               fill="#ffffff"
               stroke={annotation.color}
               strokeWidth={isSelected ? 1.8 : 1.1}
             />
           ) : null}
-          <text x={labelX} y={labelY - 9} className="annotation-label">
+          <text x={labelX} y={labelY - 9} className="annotation-label" fill={textColor} style={{ fontSize: `${fontSize}px` }}>
             {annotation.text}
           </text>
         </g>,

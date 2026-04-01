@@ -24,6 +24,7 @@ import type {
 type AppPage = "app" | "examples" | "quickstart" | "contact";
 type ExportPreset = "paper" | "slide" | "poster" | "custom";
 type WorkspaceStep = "setup" | "workspace" | "export";
+type ExampleKind = "espript" | "story" | "mono" | "mechanism" | "topology";
 
 const toolOptions: { id: Tool; label: string }[] = [
   { id: "select", label: "Select" },
@@ -179,6 +180,19 @@ type ProjectState = {
   bottomStructureInput: string;
 };
 
+type EditorSnapshot = Omit<ProjectState, "version"> & {
+  selectedAnnotationId: string | null;
+  previewExport: boolean;
+};
+
+type AutosaveEnvelope = {
+  version: 1;
+  savedAt: string;
+  snapshot: EditorSnapshot;
+};
+
+const AUTOSAVE_KEY = "alignnotate-autosave-v1";
+
 export default function App() {
   const [activePage, setActivePage] = useState<AppPage>("app");
   const [workspaceStep, setWorkspaceStep] = useState<WorkspaceStep>("setup");
@@ -217,11 +231,17 @@ export default function App() {
   const [showToolTray, setShowToolTray] = useState(false);
   const [showPasteComposer, setShowPasteComposer] = useState(false);
   const [status, setStatus] = useState("Upload an alignment or open an example, then annotate directly on the figure.");
+  const [autosaveEnabled, setAutosaveEnabled] = useState(false);
+  const [availableAutosave, setAvailableAutosave] = useState<AutosaveEnvelope | null>(null);
+  const [historyPast, setHistoryPast] = useState<EditorSnapshot[]>([]);
+  const [historyFuture, setHistoryFuture] = useState<EditorSnapshot[]>([]);
   const editorSvgRef = useRef<SVGSVGElement | null>(null);
   const exportSvgRef = useRef<SVGSVGElement | null>(null);
   const annotationDragRef = useRef<AnnotationDrag | null>(null);
   const dragSelectionRef = useRef<Selection | null>(null);
   const dragFrameRef = useRef<number | null>(null);
+  const snapshotTransitionRef = useRef<null | "seed" | "navigate">(null);
+  const lastSnapshotKeyRef = useRef<string | null>(null);
   const editorMetrics = useMemo(() => (alignment ? createLayoutMetrics(alignment, "editor") : null), [alignment]);
   const exportMetrics = useMemo(() => {
     if (!alignment) {
@@ -242,6 +262,225 @@ export default function App() {
     () => annotations.find((item) => item.id === selectedAnnotationId) ?? null,
     [annotations, selectedAnnotationId],
   );
+  const currentSnapshot = useMemo<EditorSnapshot>(
+    () => ({
+      inputText,
+      annotations,
+      activeTool,
+      color,
+      textValue,
+      visualizationMode,
+      espriptPreset,
+      showConservationStrip,
+      useCustomConservationColors,
+      conservationColors,
+      showLegend,
+      includeAutoLegend,
+      customLegendItems,
+      boxStrokeWidth,
+      exportPreset,
+      printColumns,
+      printSpacing,
+      exportScale,
+      pdfQuality,
+      structureRenderStyle,
+      structureInput,
+      bottomStructureInput,
+      selectedAnnotationId,
+      previewExport,
+    }),
+    [
+      inputText,
+      annotations,
+      activeTool,
+      color,
+      textValue,
+      visualizationMode,
+      espriptPreset,
+      showConservationStrip,
+      useCustomConservationColors,
+      conservationColors,
+      showLegend,
+      includeAutoLegend,
+      customLegendItems,
+      boxStrokeWidth,
+      exportPreset,
+      printColumns,
+      printSpacing,
+      exportScale,
+      pdfQuality,
+      structureRenderStyle,
+      structureInput,
+      bottomStructureInput,
+      selectedAnnotationId,
+      previewExport,
+    ],
+  );
+  const currentSnapshotKey = useMemo(() => JSON.stringify(currentSnapshot), [currentSnapshot]);
+  const canUndo = historyPast.length > 1;
+  const canRedo = historyFuture.length > 0;
+  const autosaveTimestampLabel = useMemo(() => {
+    if (!availableAutosave?.savedAt) {
+      return null;
+    }
+
+    const saved = new Date(availableAutosave.savedAt);
+    if (Number.isNaN(saved.getTime())) {
+      return null;
+    }
+
+    return saved.toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }, [availableAutosave]);
+
+  function buildProjectPayload(snapshot: EditorSnapshot = currentSnapshot): ProjectState {
+    return {
+      version: 1,
+      inputText: snapshot.inputText,
+      annotations: snapshot.annotations,
+      activeTool: snapshot.activeTool,
+      color: snapshot.color,
+      textValue: snapshot.textValue,
+      visualizationMode: snapshot.visualizationMode,
+      espriptPreset: snapshot.espriptPreset,
+      showConservationStrip: snapshot.showConservationStrip,
+      useCustomConservationColors: snapshot.useCustomConservationColors,
+      conservationColors: snapshot.conservationColors,
+      showLegend: snapshot.showLegend,
+      includeAutoLegend: snapshot.includeAutoLegend,
+      customLegendItems: snapshot.customLegendItems,
+      boxStrokeWidth: snapshot.boxStrokeWidth,
+      exportPreset: snapshot.exportPreset,
+      printColumns: snapshot.printColumns,
+      printSpacing: snapshot.printSpacing,
+      exportScale: snapshot.exportScale,
+      pdfQuality: snapshot.pdfQuality,
+      structureRenderStyle: snapshot.structureRenderStyle,
+      structureInput: snapshot.structureInput,
+      bottomStructureInput: snapshot.bottomStructureInput,
+    };
+  }
+
+  function applyEditorSnapshot(snapshot: EditorSnapshot, mode: "seed" | "navigate", nextStatus?: string): void {
+    snapshotTransitionRef.current = mode;
+    setInputText(snapshot.inputText);
+    setAnnotations(snapshot.annotations);
+    setActiveTool(snapshot.activeTool);
+    setColor(snapshot.color);
+    setTextValue(snapshot.textValue);
+    setVisualizationMode(snapshot.visualizationMode);
+    setEspriptPreset(snapshot.espriptPreset);
+    setShowConservationStrip(snapshot.showConservationStrip);
+    setUseCustomConservationColors(snapshot.useCustomConservationColors);
+    setConservationColors(snapshot.conservationColors);
+    setShowLegend(snapshot.showLegend);
+    setIncludeAutoLegend(snapshot.includeAutoLegend);
+    setCustomLegendItems(snapshot.customLegendItems);
+    setBoxStrokeWidth(snapshot.boxStrokeWidth);
+    setExportPreset(snapshot.exportPreset);
+    setPrintColumns(snapshot.printColumns);
+    setPrintSpacing(snapshot.printSpacing);
+    setExportScale(snapshot.exportScale);
+    setPdfQuality(snapshot.pdfQuality);
+    setStructureRenderStyle(snapshot.structureRenderStyle);
+    setStructureInput(snapshot.structureInput);
+    setBottomStructureInput(snapshot.bottomStructureInput);
+    setSelectedAnnotationId(snapshot.selectedAnnotationId);
+    setPreviewExport(snapshot.previewExport);
+    setSelection(null);
+    setPendingBridgeAnchor(null);
+    setError(null);
+
+    try {
+      const parsed = parseAlignment(snapshot.inputText, "Restored alignment");
+      setAlignment(parsed);
+      setWorkspaceStep("workspace");
+      setActivePage("app");
+      setShowPasteComposer(true);
+      if (nextStatus) {
+        setStatus(nextStatus);
+      }
+    } catch (loadError) {
+      snapshotTransitionRef.current = null;
+      const message = loadError instanceof Error ? loadError.message : "Could not restore saved workspace.";
+      setError(message);
+      setStatus(message);
+    }
+  }
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(AUTOSAVE_KEY);
+      if (!stored) {
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as AutosaveEnvelope;
+      if (!parsed?.snapshot || typeof parsed.savedAt !== "string") {
+        return;
+      }
+
+      setAvailableAutosave(parsed);
+    } catch {
+      window.localStorage.removeItem(AUTOSAVE_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!lastSnapshotKeyRef.current) {
+      lastSnapshotKeyRef.current = currentSnapshotKey;
+      setHistoryPast([currentSnapshot]);
+      setHistoryFuture([]);
+      return;
+    }
+
+    if (snapshotTransitionRef.current === "seed") {
+      lastSnapshotKeyRef.current = currentSnapshotKey;
+      setHistoryPast([currentSnapshot]);
+      setHistoryFuture([]);
+      snapshotTransitionRef.current = null;
+      return;
+    }
+
+    if (snapshotTransitionRef.current === "navigate") {
+      lastSnapshotKeyRef.current = currentSnapshotKey;
+      snapshotTransitionRef.current = null;
+      return;
+    }
+
+    if (lastSnapshotKeyRef.current === currentSnapshotKey) {
+      return;
+    }
+
+    lastSnapshotKeyRef.current = currentSnapshotKey;
+    setHistoryPast((current) => {
+      const next = [...current, currentSnapshot];
+      return next.length > 60 ? next.slice(next.length - 60) : next;
+    });
+    setHistoryFuture([]);
+  }, [currentSnapshot, currentSnapshotKey]);
+
+  useEffect(() => {
+    if (!autosaveEnabled) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      const envelope: AutosaveEnvelope = {
+        version: 1,
+        savedAt: new Date().toISOString(),
+        snapshot: currentSnapshot,
+      };
+      window.localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(envelope));
+      setAvailableAutosave(envelope);
+    }, 300);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [autosaveEnabled, currentSnapshot]);
 
   useEffect(() => {
     const handlePointerUp = () => {
@@ -323,10 +562,22 @@ export default function App() {
         setSelectedAnnotationId(null);
       }
 
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z" && event.shiftKey) {
+        event.preventDefault();
+        redoEditorState();
+        return;
+      }
+
+      if ((event.ctrlKey && event.key.toLowerCase() === "y")) {
+        event.preventDefault();
+        redoEditorState();
+        return;
+      }
+
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
-        setAnnotations((current) => current.slice(0, -1));
-        setSelectedAnnotationId(null);
+        undoEditorState();
+        return;
       }
 
       if (event.key === "Escape") {
@@ -343,7 +594,7 @@ export default function App() {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [annotations, dragState.active, dragState.selection, selectedAnnotationId]);
+  }, [annotations, dragState.active, dragState.selection, historyFuture, historyPast, selectedAnnotationId]);
 
   useEffect(() => {
     if (!alignment) {
@@ -414,6 +665,42 @@ export default function App() {
     setStatus(`Applied ${preset} export preset.`);
   }
 
+  function enableAutosave(): void {
+    setAutosaveEnabled(true);
+  }
+
+  function undoEditorState(): void {
+    if (historyPast.length <= 1) {
+      return;
+    }
+
+    const previous = historyPast[historyPast.length - 2];
+    const current = historyPast[historyPast.length - 1];
+    setHistoryPast((items) => items.slice(0, -1));
+    setHistoryFuture((items) => [current, ...items]);
+    applyEditorSnapshot(previous, "navigate", "Undid the last editor change.");
+  }
+
+  function redoEditorState(): void {
+    if (historyFuture.length === 0) {
+      return;
+    }
+
+    const [next, ...rest] = historyFuture;
+    setHistoryFuture(rest);
+    setHistoryPast((items) => [...items, next]);
+    applyEditorSnapshot(next, "navigate", "Restored the next editor change.");
+  }
+
+  function restoreAutosave(): void {
+    if (!availableAutosave) {
+      return;
+    }
+
+    enableAutosave();
+    applyEditorSnapshot(availableAutosave.snapshot, "seed", "Restored autosaved workspace.");
+  }
+
   function annotationDisplayName(annotation: Annotation): string {
     return annotation.label?.trim() || annotation.type.replace("-", " ");
   }
@@ -447,10 +734,15 @@ export default function App() {
     setStatus(`Duplicated ${annotationDisplayName(source)}.`);
   }
 
-  function loadExampleWorkspace(example: "espript" | "story" | "mono"): void {
+  function loadExampleWorkspace(example: ExampleKind): void {
+    snapshotTransitionRef.current = "seed";
     const parsed = parseAlignment(sampleAlignment, "Sample kinase alignment");
     const topTrack = buildSampleTrack(parsed.alignmentLength, "top");
     const bottomTrack = buildSampleTrack(parsed.alignmentLength, "bottom");
+    const exampleAnnotations = buildDemoAnnotations(example);
+    const exampleLegendItems = buildDemoLegendItems(example);
+
+    enableAutosave();
     setInputText(sampleAlignment);
     setAlignment(parsed);
     setSecondaryStructureTrack(parseSecondaryStructureTrack(`Reference structure\n${topTrack}`, parsed));
@@ -461,23 +753,42 @@ export default function App() {
     setSelectedAnnotationId(null);
     setPendingBridgeAnchor(null);
     setError(null);
+    setIncludeAutoLegend(true);
+    setCustomLegendItems(exampleLegendItems);
+    setPreviewExport(example === "espript" || example === "topology");
 
     if (example === "espript") {
       setVisualizationMode("espript");
       setEspriptPreset("classic");
       applyExportPreset("paper");
-      setAnnotations(buildDemoAnnotations("espript"));
+      setAnnotations(exampleAnnotations);
       setShowConservationStrip(true);
+      setStructureRenderStyle("classic");
     } else if (example === "story") {
       setVisualizationMode("publication-flashy");
       applyExportPreset("slide");
-      setAnnotations(buildDemoAnnotations("story"));
+      setAnnotations(exampleAnnotations);
       setShowConservationStrip(true);
-    } else {
+      setStructureRenderStyle("classic");
+    } else if (example === "mono") {
       setVisualizationMode("publication-mono");
       applyExportPreset("poster");
-      setAnnotations(buildDemoAnnotations("mono"));
+      setAnnotations(exampleAnnotations);
       setShowConservationStrip(false);
+      setStructureRenderStyle("classic");
+    } else if (example === "mechanism") {
+      setVisualizationMode("publication-classic");
+      applyExportPreset("slide");
+      setAnnotations(exampleAnnotations);
+      setShowConservationStrip(true);
+      setShowLegend(true);
+      setStructureRenderStyle("classic");
+    } else {
+      setVisualizationMode("publication-classic");
+      applyExportPreset("paper");
+      setAnnotations(exampleAnnotations);
+      setShowConservationStrip(true);
+      setStructureRenderStyle("protopo");
     }
 
     setActivePage("app");
@@ -493,7 +804,9 @@ export default function App() {
 
   function loadAlignment() {
     try {
+      snapshotTransitionRef.current = "seed";
       const parsed = parseAlignment(inputText, "User alignment");
+      enableAutosave();
       setAlignment(parsed);
       setAnnotations([]);
       setSelection(null);
@@ -514,6 +827,7 @@ export default function App() {
     setShowPasteComposer(true);
     setStatus(`Loaded ${parsed.sequences.length} sequences across ${parsed.alignmentLength} alignment columns.`);
     } catch (parseError) {
+      snapshotTransitionRef.current = null;
       const message = parseError instanceof Error ? parseError.message : "Could not parse alignment.";
       setError(message);
       setStatus("Parsing failed. Check the input format and try again.");
@@ -529,7 +843,9 @@ export default function App() {
     file.text().then((text) => {
       setInputText(text);
       try {
+        snapshotTransitionRef.current = "seed";
         const parsed = parseAlignment(text, file.name);
+        enableAutosave();
         setAlignment(parsed);
         setAnnotations([]);
         setSelection(null);
@@ -550,6 +866,7 @@ export default function App() {
         setShowPasteComposer(true);
         setStatus(`Loaded ${file.name} with ${parsed.sequences.length} sequences.`);
       } catch (parseError) {
+        snapshotTransitionRef.current = null;
         const message = parseError instanceof Error ? parseError.message : "Could not parse alignment.";
         setError(message);
       }
@@ -564,31 +881,7 @@ export default function App() {
   }
 
   function saveProject() {
-    const payload: ProjectState = {
-      version: 1,
-      inputText,
-      annotations,
-      activeTool,
-      color,
-      textValue,
-      visualizationMode,
-      espriptPreset,
-      showConservationStrip,
-      useCustomConservationColors,
-      conservationColors,
-      showLegend,
-      includeAutoLegend,
-      customLegendItems,
-      boxStrokeWidth,
-      exportPreset,
-      printColumns,
-      printSpacing,
-      exportScale,
-      pdfQuality,
-      structureRenderStyle,
-      structureInput,
-      bottomStructureInput,
-    };
+    const payload = buildProjectPayload();
 
     downloadBlob("alignment-project.json", "application/json;charset=utf-8", `${JSON.stringify(payload, null, 2)}\n`);
     setStatus("Saved project JSON.");
@@ -608,6 +901,8 @@ export default function App() {
         }
 
         const parsed = parseAlignment(project.inputText, file.name);
+        snapshotTransitionRef.current = "seed";
+        enableAutosave();
         setInputText(project.inputText);
         setAlignment(parsed);
         setAnnotations(Array.isArray(project.annotations) ? project.annotations : []);
@@ -639,6 +934,7 @@ export default function App() {
         setShowPasteComposer(true);
         setStatus(`Loaded project ${file.name}.`);
       } catch (loadError) {
+        snapshotTransitionRef.current = null;
         const message = loadError instanceof Error ? loadError.message : "Could not load project.";
         setStatus(message);
       } finally {
@@ -865,6 +1161,8 @@ export default function App() {
         dy: -18,
         boxed: true,
         connector: true,
+        fontSize: 13,
+        textColor: color,
       };
       setAnnotations((current) => [...current, annotation]);
       setSelectedAnnotationId(annotation.id);
@@ -1004,7 +1302,7 @@ export default function App() {
 
           {workspaceStep === "setup" ? (
             <>
-              <section className="panel-card workspace-card">
+              <section className="panel-card workspace-card workspace-card--appearance">
                 <div className="workspace-card-head">
                   <div>
                     <h2>Start a figure</h2>
@@ -1045,7 +1343,7 @@ export default function App() {
                 {error ? <p className="error-text">{error}</p> : null}
               </section>
 
-              <section className="panel-card workspace-card">
+              <section className="panel-card workspace-card workspace-card--structure">
                 <div className="workspace-card-head">
                   <div>
                     <h2>Resume or start from an example</h2>
@@ -1060,20 +1358,23 @@ export default function App() {
                   <button className="secondary-button" onClick={() => loadExampleWorkspace("espript")}>
                     ESPript example
                   </button>
-                  <button className="secondary-button" onClick={() => loadExampleWorkspace("story")}>
-                    Talk example
+                  <button className="secondary-button" onClick={() => loadExampleWorkspace("mechanism")}>
+                    Mechanism example
                   </button>
-                  <button className="secondary-button" onClick={() => loadExampleWorkspace("mono")}>
-                    Mono example
+                  <button className="secondary-button" onClick={() => loadExampleWorkspace("topology")}>
+                    Topology example
                   </button>
                 </div>
+                {availableAutosave ? (
+                  <p className="helper-text">Autosave available from {autosaveTimestampLabel}. Use the startup card to restore it.</p>
+                ) : null}
               </section>
             </>
           ) : null}
 
           {workspaceStep === "workspace" ? (
             <>
-              <section className="panel-card workspace-card">
+              <section className="panel-card workspace-card workspace-card--annotation">
                 <div className="workspace-card-head">
                   <div>
                     <h2>Appearance</h2>
@@ -1179,7 +1480,7 @@ export default function App() {
                 </label>
               </section>
 
-              <section className="panel-card workspace-card">
+              <section className="panel-card workspace-card workspace-card--annotation">
                 <div className="workspace-card-head">
                   <div>
                     <h2>Structure tracks</h2>
@@ -1311,7 +1612,7 @@ export default function App() {
               </section>
 
               {selectedAnnotation ? (
-                <section className="panel-card workspace-card inspector-card">
+                <section className="panel-card workspace-card workspace-card--inspector inspector-card">
                   <div className="workspace-card-head">
                     <div>
                       <h2>Selected annotation</h2>
@@ -1372,6 +1673,40 @@ export default function App() {
                             setTextValue(nextValue);
                             updateSelectedAnnotation((annotation) =>
                               annotation.type === "text" ? { ...annotation, text: nextValue || starterText } : annotation,
+                            );
+                          }}
+                        />
+                      </label>
+                    ) : null}
+                    {selectedAnnotation.type === "text" ? (
+                      <label className="field-label">
+                        Text size
+                        <input
+                          type="range"
+                          min="10"
+                          max="28"
+                          step="1"
+                          value={selectedAnnotation.fontSize ?? 13}
+                          onChange={(event) => {
+                            const nextSize = Number(event.target.value);
+                            updateSelectedAnnotation((annotation) =>
+                              annotation.type === "text" ? { ...annotation, fontSize: nextSize } : annotation,
+                            );
+                          }}
+                        />
+                      </label>
+                    ) : null}
+                    {selectedAnnotation.type === "text" ? (
+                      <label className="field-label">
+                        Text color
+                        <input
+                          className="toolbar-color"
+                          type="color"
+                          value={selectedAnnotation.textColor ?? selectedAnnotation.color}
+                          onChange={(event) => {
+                            const nextColor = event.target.value;
+                            updateSelectedAnnotation((annotation) =>
+                              annotation.type === "text" ? { ...annotation, textColor: nextColor } : annotation,
                             );
                           }}
                         />
@@ -1526,7 +1861,7 @@ export default function App() {
                 </section>
               ) : null}
 
-              <section className="panel-card workspace-card">
+              <section className="panel-card workspace-card workspace-card--layers">
                 <div className="workspace-card-head">
                   <div>
                     <h2>Layers</h2>
@@ -1858,6 +2193,17 @@ export default function App() {
               <span className="workspace-pill">Tool: {toolOptions.find((tool) => tool.id === activeTool)?.label}</span>
               {previewExport ? <span className="workspace-pill">Print preview</span> : null}
               {focusMode ? <span className="workspace-pill">Focus mode</span> : null}
+              <button className="secondary-button" disabled={!canUndo} onClick={undoEditorState}>
+                Undo
+              </button>
+              <button className="secondary-button" disabled={!canRedo} onClick={redoEditorState}>
+                Redo
+              </button>
+              {focusMode ? (
+                <button className="secondary-button focus-exit-button" onClick={() => setFocusMode(false)}>
+                  Exit focus
+                </button>
+              ) : null}
             </div>
           </section>
 
@@ -1869,6 +2215,45 @@ export default function App() {
               </span>
             ) : null}
           </div>
+
+          {alignment && workspaceStep !== "setup" ? (
+            <section className="panel-card canvas-preview-dock">
+              <div className="canvas-preview-head">
+                <div>
+                  <strong>Figure preview</strong>
+                  <span>{previewExport ? "Export styling on" : "Editor styling on"}</span>
+                </div>
+              </div>
+              <div className="canvas-preview-controls">
+                <label className="toggle-row compact-toggle">
+                  <span>Print preview</span>
+                  <input type="checkbox" checked={previewExport} onChange={(event) => setPreviewExport(event.target.checked)} />
+                </label>
+                <label className="toggle-row compact-toggle">
+                  <span>Conservation strip</span>
+                  <input type="checkbox" checked={showConservationStrip} onChange={(event) => setShowConservationStrip(event.target.checked)} />
+                </label>
+                <label className="toggle-row compact-toggle">
+                  <span>Legend</span>
+                  <input type="checkbox" checked={showLegend} onChange={(event) => setShowLegend(event.target.checked)} />
+                </label>
+                <div className="canvas-preview-presets">
+                  <span className="toolbar-label">Quick export preset</span>
+                  <div className="segmented segmented--compact">
+                    {(["paper", "slide", "poster"] as const).map((preset) => (
+                      <button
+                        key={`canvas-${preset}`}
+                        className={exportPreset === preset ? "segment-button active" : "segment-button"}
+                        onClick={() => applyExportPreset(preset)}
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+          ) : null}
 
           <div className="canvas-card">
             {alignment ? (
@@ -1902,6 +2287,50 @@ export default function App() {
             ) : (
               <div className="empty-state">Load an alignment to begin.</div>
             )}
+            {workspaceStep === "setup" ? (
+              <div className="start-overlay">
+                <div className="start-overlay-card">
+                  <p className="eyebrow workflow-eyebrow">Get started</p>
+                  <h2>Open an alignment or try the sample</h2>
+                  <p className="helper-text">Upload a file, open a ready-made example, or continue with the sample figure already visible behind this panel.</p>
+                <div className="start-grid">
+                  <label className="file-button">
+                    Upload alignment
+                    <input type="file" accept=".aln,.aln-clustal_num,.clustal,.txt,.fa,.fasta,.fas" onChange={handleFileUpload} />
+                  </label>
+                  <label className="file-button">
+                    Load project JSON
+                    <input type="file" accept=".json,application/json" onChange={handleProjectUpload} />
+                  </label>
+                  <button className="secondary-button" onClick={() => loadExampleWorkspace("espript")}>
+                    Open example
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={() => {
+                      snapshotTransitionRef.current = "seed";
+                      enableAutosave();
+                      setWorkspaceStep("workspace");
+                      setStatus("Continuing with the sample workspace.");
+                    }}
+                  >
+                    Continue with sample
+                  </button>
+                  </div>
+                  {availableAutosave ? (
+                    <div className="start-overlay-autosave">
+                      <strong>Autosave available</strong>
+                      <p className="helper-text">
+                        Restore the last browser-saved workspace{autosaveTimestampLabel ? ` from ${autosaveTimestampLabel}` : ""}.
+                      </p>
+                      <button className="secondary-button" onClick={restoreAutosave}>
+                        Restore autosave
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
           </div>
 
           {!focusMode ? (
@@ -1969,6 +2398,38 @@ export default function App() {
                     <span className="example-tag">Poster preset</span>
                   </div>
                   <button className="primary-button" onClick={() => loadExampleWorkspace("mono")}>
+                    Load in app
+                  </button>
+                </article>
+                <article className="example-card">
+                  <div className="example-preview example-preview--mechanism" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <h3>Mechanism figure</h3>
+                  <p className="helper-text">Bridge, span-arrow, motif labels, and connector-heavy annotations for mechanistic storytelling.</p>
+                  <div className="example-tags">
+                    <span className="example-tag">Mechanism</span>
+                    <span className="example-tag">Callouts</span>
+                  </div>
+                  <button className="primary-button" onClick={() => loadExampleWorkspace("mechanism")}>
+                    Load in app
+                  </button>
+                </article>
+                <article className="example-card">
+                  <div className="example-preview example-preview--topology" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <h3>Topology figure</h3>
+                  <p className="helper-text">Structure-forward example with a topology-style track and a paper export preset.</p>
+                  <div className="example-tags">
+                    <span className="example-tag">Topology</span>
+                    <span className="example-tag">ProTopo</span>
+                  </div>
+                  <button className="primary-button" onClick={() => loadExampleWorkspace("topology")}>
                     Load in app
                   </button>
                 </article>
@@ -2105,7 +2566,25 @@ function buildSampleTrack(length: number, lane: "top" | "bottom"): string {
   }).join("");
 }
 
-function buildDemoAnnotations(kind: "espript" | "story" | "mono"): Annotation[] {
+function buildDemoLegendItems(kind: ExampleKind): CustomLegendItem[] {
+  if (kind === "mechanism") {
+    return [
+      { id: "legend-mechanism-1", label: "Catalytic bridge", color: "#2563eb", style: "outline" },
+      { id: "legend-mechanism-2", label: "Motif span", color: "#b45309", style: "fill" },
+    ];
+  }
+
+  if (kind === "topology") {
+    return [
+      { id: "legend-topology-1", label: "Topology callout", color: "#0f766e", style: "outline" },
+      { id: "legend-topology-2", label: "Feature site", color: "#7c3aed", style: "text" },
+    ];
+  }
+
+  return [];
+}
+
+function buildDemoAnnotations(kind: ExampleKind): Annotation[] {
   if (kind === "espript") {
     return [
       {
@@ -2170,6 +2649,95 @@ function buildDemoAnnotations(kind: "espript" | "story" | "mono"): Annotation[] 
         text: "Helix cap",
         dx: 24,
         dy: -18,
+      },
+    ];
+  }
+
+  if (kind === "mechanism") {
+    return [
+      {
+        id: "demo-mechanism-bridge",
+        type: "bridge",
+        label: "Catalytic bridge",
+        color: "#2563eb",
+        from: { sequenceIndex: 0, column: 31 },
+        to: { sequenceIndex: 0, column: 37 },
+        style: "bracket",
+        placement: "top",
+        height: 1.4,
+      },
+      {
+        id: "demo-mechanism-span",
+        type: "span-arrow",
+        label: "Activation loop",
+        color: "#b45309",
+        selection: { startSequence: 1, endSequence: 1, startColumn: 84, endColumn: 101 },
+        placement: "bottom",
+        size: 1.2,
+        tailDx: 0,
+        tailDy: 0,
+        headDx: 0,
+        headDy: 0,
+      },
+      {
+        id: "demo-mechanism-text",
+        type: "text",
+        label: "Catalytic note",
+        color: "#0f172a",
+        selection: { startSequence: 0, endSequence: 0, startColumn: 98, endColumn: 98 },
+        text: "Catalytic loop",
+        dx: 20,
+        dy: -26,
+      },
+      {
+        id: "demo-mechanism-arrow",
+        type: "arrow",
+        label: "Callout",
+        color: "#dc2626",
+        selection: { startSequence: 2, endSequence: 2, startColumn: 108, endColumn: 112 },
+        placement: "top",
+        size: 1.1,
+        tailDx: 0,
+        tailDy: 0,
+        headDx: 0,
+        headDy: 0,
+      },
+    ];
+  }
+
+  if (kind === "topology") {
+    return [
+      {
+        id: "demo-topology-bracket",
+        type: "bracket",
+        label: "Core topology",
+        color: "#0f766e",
+        selection: { startSequence: 0, endSequence: 0, startColumn: 8, endColumn: 24 },
+        placement: "top",
+        size: 1.1,
+        tailDx: 0,
+        tailDy: 0,
+        headDx: 0,
+        headDy: 0,
+      },
+      {
+        id: "demo-topology-circle",
+        type: "open-circle",
+        label: "Feature site",
+        color: "#7c3aed",
+        selection: { startSequence: 3, endSequence: 3, startColumn: 96, endColumn: 96 },
+        placement: "top",
+        size: 1.2,
+      },
+      {
+        id: "demo-topology-text",
+        type: "text",
+        label: "Topology label",
+        color: "#111827",
+        selection: { startSequence: 0, endSequence: 0, startColumn: 38, endColumn: 38 },
+        text: "Sheet edge",
+        dx: 18,
+        dy: -24,
       },
     ];
   }
