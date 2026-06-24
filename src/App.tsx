@@ -13,8 +13,10 @@ import type {
   ConservationColorOverrides,
   CustomLegendItem,
   EspriptPreset,
+  EspriptScoreMode,
   SecondaryStructureTrack,
   Selection,
+  StructurePalette,
   StructureRenderStyle,
   TextAnnotation,
   Tool,
@@ -113,6 +115,13 @@ const defaultConservationColors: ConservationColorOverrides = {
   neutral: "#d0d5dd",
 };
 
+const defaultStructurePalette: StructurePalette = {
+  helix: "#c96b2c",
+  strand: "#f0a83b",
+  loop: "#d7dee8",
+  connector: "#6b7280",
+};
+
 const exportPresetDefaults: Record<Exclude<ExportPreset, "custom">, { printColumns: number; printSpacing: number; exportScale: number; pdfQuality: number; showLegend: boolean; boxStrokeWidth: number }> = {
   paper: {
     printColumns: 60,
@@ -138,6 +147,14 @@ const exportPresetDefaults: Record<Exclude<ExportPreset, "custom">, { printColum
     showLegend: true,
     boxStrokeWidth: 2.8,
   },
+};
+
+const espriptThresholdDefaults: Record<EspriptScoreMode, number> = {
+  B: 0.7,
+  I: 0.7,
+  S: 0.7,
+  M: 0.75,
+  E: 0.75,
 };
 
 type DragSelection = {
@@ -170,12 +187,17 @@ type ProjectState = {
   includeAutoLegend: boolean;
   customLegendItems: CustomLegendItem[];
   boxStrokeWidth: number;
+  espriptScoreMode: EspriptScoreMode;
+  espriptThreshold: number;
+  espriptDiffThreshold: number;
+  espriptGroupsInput: string;
   exportPreset: ExportPreset;
   printColumns: number;
   printSpacing: number;
   exportScale: number;
   pdfQuality: number;
   structureRenderStyle: StructureRenderStyle;
+  structurePalette: StructurePalette;
   structureInput: string;
   bottomStructureInput: string;
 };
@@ -206,8 +228,12 @@ export default function App() {
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [color, setColor] = useState("#f79009");
   const [textValue, setTextValue] = useState(starterText);
-  const [visualizationMode, setVisualizationMode] = useState<VisualizationMode>("publication-classic");
+  const [visualizationMode, setVisualizationMode] = useState<VisualizationMode>("espript");
   const [espriptPreset, setEspriptPreset] = useState<EspriptPreset>("classic");
+  const [espriptScoreMode, setEspriptScoreMode] = useState<EspriptScoreMode>("S");
+  const [espriptThreshold, setEspriptThreshold] = useState(0.7);
+  const [espriptDiffThreshold, setEspriptDiffThreshold] = useState(0.2);
+  const [espriptGroupsInput, setEspriptGroupsInput] = useState("");
   const [showConservationStrip, setShowConservationStrip] = useState(true);
   const [useCustomConservationColors, setUseCustomConservationColors] = useState(false);
   const [conservationColors, setConservationColors] = useState<ConservationColorOverrides>(defaultConservationColors);
@@ -221,6 +247,7 @@ export default function App() {
   const [exportScale, setExportScale] = useState(2);
   const [pdfQuality, setPdfQuality] = useState(0.94);
   const [structureRenderStyle, setStructureRenderStyle] = useState<StructureRenderStyle>("classic");
+  const [structurePalette, setStructurePalette] = useState<StructurePalette>(defaultStructurePalette);
   const [structureInput, setStructureInput] = useState("");
   const [secondaryStructureTrack, setSecondaryStructureTrack] = useState<SecondaryStructureTrack | null>(null);
   const [bottomStructureInput, setBottomStructureInput] = useState("");
@@ -262,6 +289,7 @@ export default function App() {
     () => annotations.find((item) => item.id === selectedAnnotationId) ?? null,
     [annotations, selectedAnnotationId],
   );
+  const espriptGroups = useMemo(() => parseEspriptGroupsInput(espriptGroupsInput, alignment), [espriptGroupsInput, alignment]);
   const currentSnapshot = useMemo<EditorSnapshot>(
     () => ({
       inputText,
@@ -278,12 +306,17 @@ export default function App() {
       includeAutoLegend,
       customLegendItems,
       boxStrokeWidth,
+      espriptScoreMode,
+      espriptThreshold,
+      espriptDiffThreshold,
+      espriptGroupsInput,
       exportPreset,
       printColumns,
       printSpacing,
       exportScale,
       pdfQuality,
       structureRenderStyle,
+      structurePalette,
       structureInput,
       bottomStructureInput,
       selectedAnnotationId,
@@ -304,19 +337,78 @@ export default function App() {
       includeAutoLegend,
       customLegendItems,
       boxStrokeWidth,
+      espriptScoreMode,
+      espriptThreshold,
+      espriptDiffThreshold,
+      espriptGroupsInput,
       exportPreset,
       printColumns,
       printSpacing,
       exportScale,
       pdfQuality,
       structureRenderStyle,
+      structurePalette,
       structureInput,
       bottomStructureInput,
       selectedAnnotationId,
       previewExport,
     ],
   );
-  const currentSnapshotKey = useMemo(() => JSON.stringify(currentSnapshot), [currentSnapshot]);
+  const persistedSnapshotKey = useMemo(
+    () =>
+      JSON.stringify({
+        inputText,
+        annotations,
+        visualizationMode,
+        espriptPreset,
+        showConservationStrip,
+        useCustomConservationColors,
+        conservationColors,
+        showLegend,
+        includeAutoLegend,
+        customLegendItems,
+        boxStrokeWidth,
+        espriptScoreMode,
+        espriptThreshold,
+        espriptDiffThreshold,
+        espriptGroupsInput,
+        exportPreset,
+        printColumns,
+        printSpacing,
+        exportScale,
+        pdfQuality,
+        structureRenderStyle,
+        structurePalette,
+        structureInput,
+        bottomStructureInput,
+      }),
+    [
+      inputText,
+      annotations,
+      visualizationMode,
+      espriptPreset,
+      showConservationStrip,
+      useCustomConservationColors,
+      conservationColors,
+      showLegend,
+      includeAutoLegend,
+      customLegendItems,
+      boxStrokeWidth,
+      espriptScoreMode,
+      espriptThreshold,
+      espriptDiffThreshold,
+      espriptGroupsInput,
+      exportPreset,
+      printColumns,
+      printSpacing,
+      exportScale,
+      pdfQuality,
+      structureRenderStyle,
+      structurePalette,
+      structureInput,
+      bottomStructureInput,
+    ],
+  );
   const canUndo = historyPast.length > 1;
   const canRedo = historyFuture.length > 0;
   const autosaveTimestampLabel = useMemo(() => {
@@ -354,12 +446,17 @@ export default function App() {
       includeAutoLegend: snapshot.includeAutoLegend,
       customLegendItems: snapshot.customLegendItems,
       boxStrokeWidth: snapshot.boxStrokeWidth,
+      espriptScoreMode: snapshot.espriptScoreMode,
+      espriptThreshold: snapshot.espriptThreshold,
+      espriptDiffThreshold: snapshot.espriptDiffThreshold,
+      espriptGroupsInput: snapshot.espriptGroupsInput,
       exportPreset: snapshot.exportPreset,
       printColumns: snapshot.printColumns,
       printSpacing: snapshot.printSpacing,
       exportScale: snapshot.exportScale,
       pdfQuality: snapshot.pdfQuality,
       structureRenderStyle: snapshot.structureRenderStyle,
+      structurePalette: snapshot.structurePalette,
       structureInput: snapshot.structureInput,
       bottomStructureInput: snapshot.bottomStructureInput,
     };
@@ -374,6 +471,10 @@ export default function App() {
     setTextValue(snapshot.textValue);
     setVisualizationMode(snapshot.visualizationMode);
     setEspriptPreset(snapshot.espriptPreset);
+    setEspriptScoreMode(snapshot.espriptScoreMode ?? "S");
+    setEspriptThreshold(snapshot.espriptThreshold ?? 0.7);
+    setEspriptDiffThreshold(snapshot.espriptDiffThreshold ?? 0.2);
+    setEspriptGroupsInput(snapshot.espriptGroupsInput ?? "");
     setShowConservationStrip(snapshot.showConservationStrip);
     setUseCustomConservationColors(snapshot.useCustomConservationColors);
     setConservationColors(snapshot.conservationColors);
@@ -387,6 +488,7 @@ export default function App() {
     setExportScale(snapshot.exportScale);
     setPdfQuality(snapshot.pdfQuality);
     setStructureRenderStyle(snapshot.structureRenderStyle);
+    setStructurePalette(snapshot.structurePalette ?? defaultStructurePalette);
     setStructureInput(snapshot.structureInput);
     setBottomStructureInput(snapshot.bottomStructureInput);
     setSelectedAnnotationId(snapshot.selectedAnnotationId);
@@ -432,14 +534,14 @@ export default function App() {
 
   useEffect(() => {
     if (!lastSnapshotKeyRef.current) {
-      lastSnapshotKeyRef.current = currentSnapshotKey;
+      lastSnapshotKeyRef.current = persistedSnapshotKey;
       setHistoryPast([currentSnapshot]);
       setHistoryFuture([]);
       return;
     }
 
     if (snapshotTransitionRef.current === "seed") {
-      lastSnapshotKeyRef.current = currentSnapshotKey;
+      lastSnapshotKeyRef.current = persistedSnapshotKey;
       setHistoryPast([currentSnapshot]);
       setHistoryFuture([]);
       snapshotTransitionRef.current = null;
@@ -447,22 +549,22 @@ export default function App() {
     }
 
     if (snapshotTransitionRef.current === "navigate") {
-      lastSnapshotKeyRef.current = currentSnapshotKey;
+      lastSnapshotKeyRef.current = persistedSnapshotKey;
       snapshotTransitionRef.current = null;
       return;
     }
 
-    if (lastSnapshotKeyRef.current === currentSnapshotKey) {
+    if (lastSnapshotKeyRef.current === persistedSnapshotKey) {
       return;
     }
 
-    lastSnapshotKeyRef.current = currentSnapshotKey;
+    lastSnapshotKeyRef.current = persistedSnapshotKey;
     setHistoryPast((current) => {
       const next = [...current, currentSnapshot];
       return next.length > 60 ? next.slice(next.length - 60) : next;
     });
     setHistoryFuture([]);
-  }, [currentSnapshot, currentSnapshotKey]);
+  }, [currentSnapshot, persistedSnapshotKey]);
 
   useEffect(() => {
     if (!autosaveEnabled) {
@@ -477,10 +579,10 @@ export default function App() {
       };
       window.localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(envelope));
       setAvailableAutosave(envelope);
-    }, 300);
+    }, 700);
 
     return () => window.clearTimeout(timeoutId);
-  }, [autosaveEnabled, currentSnapshot]);
+  }, [autosaveEnabled, currentSnapshot, persistedSnapshotKey]);
 
   useEffect(() => {
     const handlePointerUp = () => {
@@ -760,35 +862,48 @@ export default function App() {
     if (example === "espript") {
       setVisualizationMode("espript");
       setEspriptPreset("classic");
+      setEspriptScoreMode("B");
+      setEspriptThreshold(0.7);
+      setEspriptDiffThreshold(0.2);
+      setEspriptGroupsInput("");
       applyExportPreset("paper");
       setAnnotations(exampleAnnotations);
       setShowConservationStrip(true);
       setStructureRenderStyle("classic");
+      setStructurePalette(defaultStructurePalette);
     } else if (example === "story") {
       setVisualizationMode("publication-flashy");
+      setEspriptGroupsInput("");
       applyExportPreset("slide");
       setAnnotations(exampleAnnotations);
       setShowConservationStrip(true);
       setStructureRenderStyle("classic");
+      setStructurePalette(defaultStructurePalette);
     } else if (example === "mono") {
       setVisualizationMode("publication-mono");
+      setEspriptGroupsInput("");
       applyExportPreset("poster");
       setAnnotations(exampleAnnotations);
       setShowConservationStrip(false);
       setStructureRenderStyle("classic");
+      setStructurePalette(defaultStructurePalette);
     } else if (example === "mechanism") {
       setVisualizationMode("publication-classic");
+      setEspriptGroupsInput("");
       applyExportPreset("slide");
       setAnnotations(exampleAnnotations);
       setShowConservationStrip(true);
       setShowLegend(true);
       setStructureRenderStyle("classic");
+      setStructurePalette(defaultStructurePalette);
     } else {
       setVisualizationMode("publication-classic");
+      setEspriptGroupsInput("");
       applyExportPreset("paper");
       setAnnotations(exampleAnnotations);
       setShowConservationStrip(true);
       setStructureRenderStyle("protopo");
+      setStructurePalette(defaultStructurePalette);
     }
 
     setActivePage("app");
@@ -909,8 +1024,12 @@ export default function App() {
         setActiveTool(project.activeTool ?? "highlight");
         setColor(project.color ?? "#f79009");
         setTextValue(project.textValue ?? starterText);
-        setVisualizationMode(project.visualizationMode ?? "publication-classic");
+        setVisualizationMode(project.visualizationMode ?? "espript");
         setEspriptPreset(project.espriptPreset ?? "classic");
+        setEspriptScoreMode(project.espriptScoreMode ?? "S");
+        setEspriptThreshold(project.espriptThreshold ?? 0.7);
+        setEspriptDiffThreshold(project.espriptDiffThreshold ?? 0.2);
+        setEspriptGroupsInput(project.espriptGroupsInput ?? "");
         setShowConservationStrip(project.showConservationStrip ?? true);
         setUseCustomConservationColors(project.useCustomConservationColors ?? false);
         setConservationColors(project.conservationColors ?? defaultConservationColors);
@@ -924,6 +1043,7 @@ export default function App() {
         setExportScale(project.exportScale ?? 2);
         setPdfQuality(project.pdfQuality ?? 0.94);
         setStructureRenderStyle(project.structureRenderStyle ?? "classic");
+        setStructurePalette(project.structurePalette ?? defaultStructurePalette);
         setStructureInput(project.structureInput ?? "");
         setBottomStructureInput(project.bottomStructureInput ?? "");
         setSelection(null);
@@ -1394,14 +1514,70 @@ export default function App() {
                   </select>
                 </label>
                 {visualizationMode === "espript" ? (
-                  <label className="field-label">
-                    ESPript preset
-                    <select className="text-field" value={espriptPreset} onChange={(event) => setEspriptPreset(event.target.value as EspriptPreset)}>
-                      <option value="classic">Classic</option>
-                      <option value="flashy">Flashy</option>
-                      <option value="identity">Identity</option>
-                    </select>
-                  </label>
+                  <>
+                    <label className="field-label">
+                      ESPript preset
+                      <select className="text-field" value={espriptPreset} onChange={(event) => setEspriptPreset(event.target.value as EspriptPreset)}>
+                        <option value="classic">Classic</option>
+                        <option value="flashy">Flashy</option>
+                        <option value="identity">Identity</option>
+                      </select>
+                    </label>
+                    <label className="field-label">
+                      ESPript scoring mode
+                      <select
+                        className="text-field"
+                        value={espriptScoreMode}
+                        onChange={(event) => {
+                          const mode = event.target.value as EspriptScoreMode;
+                          setEspriptScoreMode(mode);
+                          setEspriptThreshold(espriptThresholdDefaults[mode]);
+                        }}
+                      >
+                        <option value="B">B: BLOSUM62 pairs</option>
+                        <option value="I">I: identity pairs</option>
+                        <option value="S">S: strict identity %</option>
+                        <option value="M">M: MultAlin similarity groups</option>
+                        <option value="E">E: physicochemical groups</option>
+                      </select>
+                      <span className="helper-text">Column scoring is now mode-driven in ESPript view instead of using one fixed heuristic.</span>
+                    </label>
+                    <label className="field-label">
+                      ESPript threshold
+                      <input
+                        type="range"
+                        min="0.45"
+                        max="0.9"
+                        step="0.01"
+                        value={espriptThreshold}
+                        onChange={(event) => setEspriptThreshold(Number(event.target.value))}
+                      />
+                      <span className="helper-text">{espriptThreshold.toFixed(2)} threshold for similarity/frame highlighting</span>
+                    </label>
+                    <label className="field-label">
+                      ESPript difference threshold
+                      <input
+                        type="range"
+                        min="0.05"
+                        max="0.5"
+                        step="0.01"
+                        value={espriptDiffThreshold}
+                        onChange={(event) => setEspriptDiffThreshold(Number(event.target.value))}
+                      />
+                      <span className="helper-text">{espriptDiffThreshold.toFixed(2)} threshold for subgroup-difference boxes when groups are provided</span>
+                    </label>
+                    <label className="field-label">
+                      ESPript groups
+                      <textarea
+                        className="alignment-input structure-input"
+                        value={espriptGroupsInput}
+                        onChange={(event) => setEspriptGroupsInput(event.target.value)}
+                        placeholder={"Optional group-aware scoring\nOne group per line, sequence IDs separated by spaces or commas"}
+                        spellCheck={false}
+                      />
+                      <span className="helper-text">Example: `Lb302 Lb326` on one line and `Lb314 Lb295` on the next enables in-group, cross-group, and difference scoring.</span>
+                    </label>
+                  </>
                 ) : null}
                 <label className="toggle-row">
                   <span>Conservation strip</span>
@@ -1503,6 +1679,43 @@ export default function App() {
                     `Classic` uses a wave-and-arrow alignment track, `SSDraw` follows the stacked ribbon style, and `ProTopo` uses topology-style helix blocks, arrows, and linkers.
                   </span>
                 </label>
+                <div className="color-grid structure-color-grid">
+                  <label className="mini-color-field">
+                    <span>Helix</span>
+                    <input
+                      type="color"
+                      value={structurePalette.helix}
+                      onChange={(event) => setStructurePalette((current) => ({ ...current, helix: event.target.value }))}
+                    />
+                  </label>
+                  <label className="mini-color-field">
+                    <span>Strand</span>
+                    <input
+                      type="color"
+                      value={structurePalette.strand}
+                      onChange={(event) => setStructurePalette((current) => ({ ...current, strand: event.target.value }))}
+                    />
+                  </label>
+                  <label className="mini-color-field">
+                    <span>Loop</span>
+                    <input
+                      type="color"
+                      value={structurePalette.loop}
+                      onChange={(event) => setStructurePalette((current) => ({ ...current, loop: event.target.value }))}
+                    />
+                  </label>
+                  <label className="mini-color-field">
+                    <span>Connector</span>
+                    <input
+                      type="color"
+                      value={structurePalette.connector}
+                      onChange={(event) => setStructurePalette((current) => ({ ...current, connector: event.target.value }))}
+                    />
+                  </label>
+                  <button className="secondary-button reset-button" onClick={() => setStructurePalette(defaultStructurePalette)}>
+                    Reset track colors
+                  </button>
+                </div>
                 <div className="section-heading">
                   <h3>Top lane</h3>
                   <button className="secondary-button" onClick={loadSampleStructureTrack}>
@@ -1980,11 +2193,15 @@ export default function App() {
                   </div>
                   <span className="help-dot" aria-label={sectionHelp.project} data-tip={sectionHelp.project} tabIndex={0}>?</span>
                 </div>
-                <div className="inline-actions export-button-row">
-                  <button className="primary-button" onClick={() => handleExport("svg")}>SVG</button>
-                  <button className="secondary-button" onClick={() => handleExport("png")}>PNG</button>
-                  <button className="secondary-button" onClick={() => handleExport("pdf")}>PDF</button>
-                </div>
+                <label className="field-label">
+                  Save as...
+                  <div className="inline-actions export-button-row">
+                    <button className="primary-button" onClick={() => handleExport("svg")}>Save as SVG</button>
+                    <button className="secondary-button" onClick={() => handleExport("png")}>Save as PNG</button>
+                    <button className="secondary-button" onClick={() => handleExport("pdf")}>Save as PDF</button>
+                  </div>
+                  <span className="helper-text">SVG keeps text/vectors editable, PNG is a flat raster image, PDF is print-ready.</span>
+                </label>
                 <div className="workflow-toggles">
                   <label className="toggle-row compact-toggle">
                     <span>Print preview</span>
@@ -2265,12 +2482,17 @@ export default function App() {
                 renderMode={previewExport ? "export" : "editor"}
                 visualizationMode={visualizationMode}
                 espriptPreset={espriptPreset}
+                espriptScoreMode={espriptScoreMode}
+                espriptThreshold={espriptThreshold}
+                espriptDiffThreshold={espriptDiffThreshold}
+                espriptGroups={espriptGroups}
                 conservationColors={useCustomConservationColors ? conservationColors : null}
                 showConservationStrip={showConservationStrip}
                 showLegend={showLegend}
                 includeAutoLegend={includeAutoLegend}
                 customLegendItems={customLegendItems}
                 structureRenderStyle={structureRenderStyle}
+                structurePalette={structurePalette}
                 secondaryStructureTrack={secondaryStructureTrack}
                 bottomStructureTrack={bottomStructureTrack}
                 boxStrokeWidth={boxStrokeWidth}
@@ -2518,12 +2740,17 @@ export default function App() {
             renderMode="export"
             visualizationMode={visualizationMode}
             espriptPreset={espriptPreset}
+            espriptScoreMode={espriptScoreMode}
+            espriptThreshold={espriptThreshold}
+            espriptDiffThreshold={espriptDiffThreshold}
+            espriptGroups={espriptGroups}
             conservationColors={useCustomConservationColors ? conservationColors : null}
             showConservationStrip={showConservationStrip}
             showLegend={showLegend}
             includeAutoLegend={includeAutoLegend}
             customLegendItems={customLegendItems}
             structureRenderStyle={structureRenderStyle}
+            structurePalette={structurePalette}
             secondaryStructureTrack={secondaryStructureTrack}
             bottomStructureTrack={bottomStructureTrack}
             boxStrokeWidth={boxStrokeWidth}
@@ -2566,6 +2793,25 @@ function buildSampleTrack(length: number, lane: "top" | "bottom"): string {
   }).join("");
 }
 
+function parseEspriptGroupsInput(input: string, alignment: AlignmentData | null): number[][] {
+  if (!alignment) {
+    return [];
+  }
+
+  const byId = new Map(alignment.sequences.map((sequence, index) => [sequence.id.trim(), index]));
+  return input
+    .split(/\n+/)
+    .map((line) =>
+      line
+        .split(/[\s,;]+/)
+        .map((token) => token.trim())
+        .filter(Boolean)
+        .map((token) => byId.get(token))
+        .filter((value): value is number => value !== undefined),
+    )
+    .filter((group) => group.length > 0);
+}
+
 function buildDemoLegendItems(kind: ExampleKind): CustomLegendItem[] {
   if (kind === "mechanism") {
     return [
@@ -2587,13 +2833,6 @@ function buildDemoLegendItems(kind: ExampleKind): CustomLegendItem[] {
 function buildDemoAnnotations(kind: ExampleKind): Annotation[] {
   if (kind === "espript") {
     return [
-      {
-        id: "demo-highlight-1",
-        type: "highlight",
-        label: "Catalytic patch",
-        color: "#7c3aed",
-        selection: { startSequence: 0, endSequence: 3, startColumn: 12, endColumn: 16 },
-      },
       {
         id: "demo-bridge-1",
         type: "bridge",

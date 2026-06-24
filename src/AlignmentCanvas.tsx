@@ -8,10 +8,12 @@ import type {
   ConservationColorOverrides,
   CustomLegendItem,
   EspriptPreset,
+  EspriptScoreMode,
   LayoutMetrics,
   RenderMode,
   SecondaryStructureTrack,
   Selection,
+  StructurePalette,
   StructureRenderStyle,
   Tool,
   VisualizationMode,
@@ -29,12 +31,17 @@ type Props = {
   renderMode: RenderMode;
   visualizationMode: VisualizationMode;
   espriptPreset: EspriptPreset;
+  espriptScoreMode: EspriptScoreMode;
+  espriptThreshold: number;
+  espriptDiffThreshold: number;
+  espriptGroups: number[][];
   conservationColors: ConservationColorOverrides | null;
   showConservationStrip: boolean;
   showLegend: boolean;
   includeAutoLegend: boolean;
   customLegendItems: CustomLegendItem[];
   structureRenderStyle: StructureRenderStyle;
+  structurePalette: StructurePalette;
   secondaryStructureTrack: SecondaryStructureTrack | null;
   bottomStructureTrack: SecondaryStructureTrack | null;
   boxStrokeWidth: number;
@@ -69,12 +76,17 @@ export const AlignmentCanvas = forwardRef<SVGSVGElement, Props>(function Alignme
     renderMode,
     visualizationMode,
     espriptPreset,
+    espriptScoreMode,
+    espriptThreshold,
+    espriptDiffThreshold,
+    espriptGroups,
     conservationColors,
     showConservationStrip,
     showLegend,
     includeAutoLegend,
     customLegendItems,
     structureRenderStyle,
+    structurePalette,
     secondaryStructureTrack,
     bottomStructureTrack,
     boxStrokeWidth,
@@ -98,7 +110,10 @@ export const AlignmentCanvas = forwardRef<SVGSVGElement, Props>(function Alignme
     () => buildBlocks(alignment, metrics, { topLaneHeight, bottomLaneHeight }),
     [alignment, metrics, topLaneHeight, bottomLaneHeight],
   );
-  const profiles = useMemo(() => buildColumnProfiles(alignment), [alignment]);
+  const profiles = useMemo(
+    () => buildColumnProfiles(alignment, { visualizationMode, espriptScoreMode, espriptThreshold, espriptDiffThreshold, sequenceGroups: espriptGroups }),
+    [alignment, visualizationMode, espriptScoreMode, espriptThreshold, espriptDiffThreshold, espriptGroups],
+  );
   const highlightColors = useMemo(() => buildHighlightColorMap(annotations), [annotations]);
   const width = metrics.padding * 2 + metrics.nameWidth + metrics.blockColumns * metrics.cellWidth + 64;
   const height =
@@ -197,6 +212,7 @@ export const AlignmentCanvas = forwardRef<SVGSVGElement, Props>(function Alignme
             highlightColors,
             showConservationStrip,
             structureRenderStyle,
+            structurePalette,
             secondaryStructureTrack,
             bottomStructureTrack,
             interactive,
@@ -206,7 +222,7 @@ export const AlignmentCanvas = forwardRef<SVGSVGElement, Props>(function Alignme
 
       <g>{annotationElements}</g>
       {renderMode === "export" && showLegend
-        ? renderLegend(width, height, visualizationMode, espriptPreset, conservationColors, includeAutoLegend, customLegendItems)
+        ? renderLegend(width, height, visualizationMode, espriptPreset, espriptScoreMode, conservationColors, includeAutoLegend, customLegendItems)
         : null}
       {interactive && pendingBridgeAnchor
         ? renderPendingBridgeAnchor(pendingBridgeAnchor, blocks, metrics, secondaryStructureTrack, renderMode)
@@ -234,6 +250,7 @@ function renderBlock(
   highlightColors: Map<string, string>,
   showConservationStrip: boolean,
   structureRenderStyle: StructureRenderStyle,
+  structurePalette: StructurePalette,
   secondaryStructureTrack: SecondaryStructureTrack | null,
   bottomStructureTrack: SecondaryStructureTrack | null,
   interactive: boolean,
@@ -250,10 +267,12 @@ function renderBlock(
         <rect x={gridX} y={0} width={gridWidth} height={block.height - 6} fill="#ffffff" />
       ) : null}
 
-      {secondaryStructureTrack ? renderStructureTrack(secondaryStructureTrack, block, gridX, metrics, renderMode, "top", structureRenderStyle) : null}
+      {secondaryStructureTrack ? renderStructureTrack(secondaryStructureTrack, block, gridX, metrics, renderMode, "top", structureRenderStyle, structurePalette) : null}
       {bottomStructureTrack
-        ? renderStructureTrack(bottomStructureTrack, block, gridX, metrics, renderMode, "bottom", structureRenderStyle, bottomTrackY)
+        ? renderStructureTrack(bottomStructureTrack, block, gridX, metrics, renderMode, "bottom", structureRenderStyle, structurePalette, bottomTrackY)
         : null}
+      {visualizationMode === "espript" && renderMode === "export" ? renderEspriptDifferenceRuns(block, alignment, profiles, metrics, renderMode) : null}
+      {visualizationMode === "espript" && renderMode === "export" ? renderEspriptBlockFrames(block, alignment, profiles, metrics, renderMode) : null}
 
       {renderMode === "editor" ? (
         <text x={nameX} y={16} className="block-label">
@@ -310,12 +329,13 @@ function renderBlock(
             </text>
 
             {renderMode === "export"
-              ? renderExportResidueRuns(
+              ? renderResidueRuns(
                   sequence.aligned,
                   sequenceIndex,
                   block,
                   profiles,
                   metrics,
+                  renderMode,
                   visualizationMode,
                   espriptPreset,
                   conservationColors,
@@ -324,12 +344,13 @@ function renderBlock(
                 )
               : null}
             {renderMode === "export"
-              ? renderExportFrameRuns(
+              ? renderFrameRuns(
                   sequence.aligned,
                   sequenceIndex,
                   block,
                   profiles,
                   metrics,
+                  renderMode,
                   visualizationMode,
                   espriptPreset,
                   conservationColors,
@@ -363,14 +384,16 @@ function renderBlock(
                     y={rowY}
                     width={metrics.cellWidth}
                     height={metrics.cellHeight}
-                    rx={renderMode === "editor" ? 3 : 0}
+                    rx={renderMode === "editor" && visualizationMode !== "espript" ? 3 : 0}
                     fill={renderMode === "editor" ? "#ffffff" : "transparent"}
-                    stroke={renderMode === "editor" ? "#eef1f4" : "transparent"}
-                    strokeWidth={renderMode === "editor" ? 0.6 : 0}
+                    stroke={renderMode === "editor" && visualizationMode !== "espript" ? "#eef1f4" : "transparent"}
+                    strokeWidth={renderMode === "editor" && visualizationMode !== "espript" ? 0.6 : 0}
                     className={interactive ? "residue-cell" : undefined}
                   />
 
-                  {style.drawBox && renderMode !== "export" ? (
+                  {style.drawBox &&
+                  renderMode !== "export" &&
+                  (visualizationMode !== "espript" || profiles[column].level === "strict" || highlightColors.has(`${sequenceIndex}:${column}`)) ? (
                     <rect
                       x={x + metrics.cellWidth * inset}
                       y={rowY + 0.7}
@@ -427,12 +450,13 @@ function renderBlock(
   );
 }
 
-function renderExportResidueRuns(
+function renderResidueRuns(
   aligned: string,
   sequenceIndex: number,
   block: BlockLayout,
   profiles: ReturnType<typeof buildColumnProfiles>,
   metrics: LayoutMetrics,
+  renderMode: RenderMode,
   visualizationMode: VisualizationMode,
   espriptPreset: EspriptPreset,
   conservationColors: ConservationColorOverrides | null,
@@ -461,12 +485,13 @@ function renderExportResidueRuns(
       <rect
         key={`run_${block.blockIndex}_${current.startColumn}_${current.endColumn}_${current.fill}_${current.stroke}`}
         x={x}
-        y={rowY + 0.3}
+        y={rowY + (renderMode === "export" ? 0.3 : 0.8)}
         width={width}
-        height={metrics.cellHeight - 0.6}
+        height={metrics.cellHeight - (renderMode === "export" ? 0.6 : 1.6)}
         fill={current.fill}
         stroke={current.stroke}
-        strokeWidth={current.stroke === "transparent" ? 0 : 0.7}
+        strokeWidth={current.stroke === "transparent" ? 0 : renderMode === "export" ? 0.7 : 0.8}
+        pointerEvents="none"
       />,
     );
     current = null;
@@ -479,7 +504,7 @@ function renderExportResidueRuns(
       sequenceIndex,
       column,
       profiles[column],
-      "export",
+      renderMode,
       visualizationMode,
       espriptPreset,
       conservationColors,
@@ -515,18 +540,23 @@ function renderExportResidueRuns(
   return <g>{runs}</g>;
 }
 
-function renderExportFrameRuns(
+function renderFrameRuns(
   aligned: string,
   sequenceIndex: number,
   block: BlockLayout,
   profiles: ReturnType<typeof buildColumnProfiles>,
   metrics: LayoutMetrics,
+  renderMode: RenderMode,
   visualizationMode: VisualizationMode,
   espriptPreset: EspriptPreset,
   conservationColors: ConservationColorOverrides | null,
   highlightColors: Map<string, string>,
   rowY: number,
 ) {
+  if (visualizationMode === "espript") {
+    return null;
+  }
+
   const gridX = metrics.padding + metrics.nameWidth;
   const runs: ReactElement[] = [];
   let current:
@@ -548,12 +578,13 @@ function renderExportFrameRuns(
       <rect
         key={`frame_${block.blockIndex}_${current.startColumn}_${current.endColumn}_${current.frameColor}`}
         x={x}
-        y={rowY + 0.5}
+        y={rowY + (renderMode === "export" ? 0.5 : 0.8)}
         width={width}
-        height={metrics.cellHeight - 1}
+        height={metrics.cellHeight - (renderMode === "export" ? 1 : 1.6)}
         fill="none"
         stroke={current.frameColor}
-        strokeWidth={0.95}
+        strokeWidth={renderMode === "export" ? 0.95 : 1}
+        pointerEvents="none"
       />,
     );
     current = null;
@@ -566,7 +597,7 @@ function renderExportFrameRuns(
       sequenceIndex,
       column,
       profiles[column],
-      "export",
+      renderMode,
       visualizationMode,
       espriptPreset,
       conservationColors,
@@ -589,6 +620,118 @@ function renderExportFrameRuns(
       endColumn: column,
       frameColor: style.frameColor,
     };
+  }
+
+  flush();
+  return <g>{runs}</g>;
+}
+
+function renderEspriptBlockFrames(
+  block: BlockLayout,
+  alignment: AlignmentData,
+  profiles: ReturnType<typeof buildColumnProfiles>,
+  metrics: LayoutMetrics,
+  renderMode: RenderMode,
+) {
+  const gridX = metrics.padding + metrics.nameWidth;
+  const topY = block.rowY[0] - block.y + (renderMode === "export" ? 0.5 : 0.8);
+  const height = block.rowY[alignment.sequences.length - 1] - block.rowY[0] + metrics.cellHeight - (renderMode === "export" ? 1 : 1.6);
+  const runs: ReactElement[] = [];
+  let current: { startColumn: number; endColumn: number } | null = null;
+
+  const flush = () => {
+    if (!current) {
+      return;
+    }
+
+    const x = gridX + (current.startColumn - block.startColumn) * metrics.cellWidth + 0.5;
+    const width = (current.endColumn - current.startColumn + 1) * metrics.cellWidth - 1;
+    runs.push(
+      <rect
+        key={`espript-frame_${block.blockIndex}_${current.startColumn}_${current.endColumn}`}
+        x={x}
+        y={topY}
+        width={width}
+        height={height}
+        fill="none"
+        stroke="#335cff"
+        strokeWidth={renderMode === "export" ? 0.95 : 1}
+        pointerEvents="none"
+      />,
+    );
+    current = null;
+  };
+
+  for (let column = block.startColumn; column <= block.endColumn; column += 1) {
+    const active = profiles[column].level === "similar" && profiles[column].frameActive;
+    if (!active) {
+      flush();
+      continue;
+    }
+
+    if (current && current.endColumn === column - 1) {
+      current.endColumn = column;
+      continue;
+    }
+
+    flush();
+    current = { startColumn: column, endColumn: column };
+  }
+
+  flush();
+  return <g>{runs}</g>;
+}
+
+function renderEspriptDifferenceRuns(
+  block: BlockLayout,
+  alignment: AlignmentData,
+  profiles: ReturnType<typeof buildColumnProfiles>,
+  metrics: LayoutMetrics,
+  renderMode: RenderMode,
+) {
+  const gridX = metrics.padding + metrics.nameWidth;
+  const topY = block.rowY[0] - block.y + (renderMode === "export" ? 0.6 : 1);
+  const height = block.rowY[alignment.sequences.length - 1] - block.rowY[0] + metrics.cellHeight - (renderMode === "export" ? 1.2 : 2);
+  const runs: ReactElement[] = [];
+  let current: { startColumn: number; endColumn: number } | null = null;
+
+  const flush = () => {
+    if (!current) {
+      return;
+    }
+
+    const x = gridX + (current.startColumn - block.startColumn) * metrics.cellWidth + 0.4;
+    const width = (current.endColumn - current.startColumn + 1) * metrics.cellWidth - 0.8;
+    runs.push(
+      <rect
+        key={`espript-diff_${block.blockIndex}_${current.startColumn}_${current.endColumn}`}
+        x={x}
+        y={topY}
+        width={width}
+        height={height}
+        fill={renderMode === "export" ? "#c8f95a" : "#d8ff74"}
+        stroke={renderMode === "export" ? "#72b000" : "#6ca300"}
+        strokeWidth={0.9}
+        pointerEvents="none"
+      />,
+    );
+    current = null;
+  };
+
+  for (let column = block.startColumn; column <= block.endColumn; column += 1) {
+    const active = profiles[column].level === "similar" && profiles[column].differenceActive;
+    if (!active) {
+      flush();
+      continue;
+    }
+
+    if (current && current.endColumn === column - 1) {
+      current.endColumn = column;
+      continue;
+    }
+
+    flush();
+    current = { startColumn: column, endColumn: column };
   }
 
   flush();
@@ -1149,6 +1292,7 @@ function renderLegend(
   height: number,
   visualizationMode: VisualizationMode,
   espriptPreset: EspriptPreset,
+  espriptScoreMode: EspriptScoreMode,
   conservationColors: ConservationColorOverrides | null,
   includeAutoLegend: boolean,
   customLegendItems: CustomLegendItem[],
@@ -1216,7 +1360,7 @@ function renderLegend(
   const legendHeight = 24 + items.length * 15 + 8;
   const x = width - 220;
   const y = height - legendHeight - 12;
-  const title = visualizationMode === "espript" ? `Legend · ESPript ${capitalize(espriptPreset)}` : "Legend";
+  const title = visualizationMode === "espript" ? `Legend · ESPript ${capitalize(espriptPreset)} · ${espriptScoreMode}` : "Legend";
 
   return (
     <g className="legend-group">
@@ -1271,6 +1415,7 @@ function renderStructureTrack(
   renderMode: RenderMode,
   placement: "top" | "bottom",
   style: StructureRenderStyle,
+  palette: StructurePalette,
   forcedLaneY?: number,
 ) {
   const laneY = placement === "top" ? (renderMode === "export" ? 16 : 18) : (forcedLaneY ?? 0) + 8;
@@ -1282,6 +1427,8 @@ function renderStructureTrack(
       {track.label}
     </text>,
   ];
+  let previousEndX: number | null = null;
+  let previousY: number | null = null;
 
   let index = block.startColumn;
   while (index <= block.endColumn) {
@@ -1301,15 +1448,32 @@ function renderStructureTrack(
     const residueCount = end - index + 1;
     const previousSymbol = classifyTrackSymbol(track.residues[index - 1] ?? "C");
     const nextSymbol = classifyTrackSymbol(track.residues[end + 1] ?? "C");
+    const segmentMidY = laneY + (renderMode === "export" ? 4.6 : 5);
+
+    if (style === "protopo" && previousEndX !== null && x > previousEndX + 1) {
+      elements.push(
+        structureConnector(
+          block.blockIndex,
+          index,
+          previousEndX,
+          x,
+          previousY ?? segmentMidY,
+          segmentMidY,
+          renderMode,
+          palette,
+          style,
+        ),
+      );
+    }
 
     if (symbol === "H") {
       helixCount += 1;
       elements.push(
         ...(style === "ssdraw"
-          ? helixSsDrawGroup(block.blockIndex, index, x, laneY, width, residueCount, renderMode)
+          ? helixSsDrawGroup(block.blockIndex, index, x, laneY, width, residueCount, renderMode, palette)
           : style === "protopo"
-            ? protopoHelix(block.blockIndex, index, x, laneY, width, renderMode)
-            : helixCoilGroup(block.blockIndex, index, x, laneY, width, renderMode)),
+            ? protopoHelix(block.blockIndex, index, x, laneY, width, renderMode, palette)
+            : helixCoilGroup(block.blockIndex, index, x, laneY, width, renderMode, palette)),
       );
       elements.push(
         <text
@@ -1326,10 +1490,10 @@ function renderStructureTrack(
       strandCount += 1;
       elements.push(
         style === "ssdraw"
-          ? ssdrawStrand(block.blockIndex, index, x, laneY, width, residueCount, renderMode, nextSymbol)
+          ? ssdrawStrand(block.blockIndex, index, x, laneY, width, residueCount, renderMode, nextSymbol, palette)
           : style === "protopo"
-            ? protopoStrand(block.blockIndex, index, x, laneY, width, renderMode)
-            : classicStrand(block.blockIndex, index, x, laneY, width),
+            ? protopoStrand(block.blockIndex, index, x, laneY, width, renderMode, palette)
+            : classicStrand(block.blockIndex, index, x, laneY, width, palette),
       );
       elements.push(
         <text
@@ -1345,9 +1509,9 @@ function renderStructureTrack(
     } else {
       elements.push(
         style === "ssdraw"
-          ? ssdrawLoop(block.blockIndex, index, x, laneY, width, residueCount, renderMode, previousSymbol, nextSymbol)
+          ? ssdrawLoop(block.blockIndex, index, x, laneY, width, residueCount, renderMode, previousSymbol, nextSymbol, palette)
           : style === "protopo"
-            ? protopoLinker(block.blockIndex, index, x, laneY, width, renderMode)
+            ? protopoLinker(block.blockIndex, index, x, laneY, width, renderMode, palette)
           : (
             <text
               key={`turn_${block.blockIndex}_${index}`}
@@ -1362,17 +1526,19 @@ function renderStructureTrack(
       );
     }
 
+    previousEndX = x + width;
+    previousY = segmentMidY;
     index = end + 1;
   }
 
   return <g>{elements}</g>;
 }
 
-function classicStrand(blockIndex: number, index: number, x: number, laneY: number, width: number): ReactElement {
+function classicStrand(blockIndex: number, index: number, x: number, laneY: number, width: number, palette: StructurePalette): ReactElement {
   const tip = x + width;
   const arrowBody = Math.max(width - 10, 2);
   const points = `${x},${laneY + 2} ${x + arrowBody},${laneY + 2} ${tip},${laneY + 5} ${x + arrowBody},${laneY + 8} ${x},${laneY + 8}`;
-  return <polygon key={`strand_${blockIndex}_${index}`} points={points} fill="#111111" opacity={0.95} />;
+  return <polygon key={`strand_${blockIndex}_${index}`} points={points} fill={palette.strand} stroke={darkenHex(palette.strand, 0.52)} strokeWidth={0.7} opacity={0.98} />;
 }
 
 function classifyTrackSymbol(symbol: string): "H" | "E" | "T" | null {
@@ -1390,6 +1556,7 @@ function helixCoilGroup(
   laneY: number,
   width: number,
   renderMode: RenderMode,
+  palette: StructurePalette,
 ): ReactElement[] {
   const amplitude = renderMode === "export" ? 3.9 : 4.4;
   const period = renderMode === "export" ? 7.8 : 8.6;
@@ -1413,7 +1580,7 @@ function helixCoilGroup(
       key={`helix_wave_${blockIndex}_${index}`}
       d={path}
       fill="none"
-      stroke="#596474"
+      stroke={darkenHex(palette.helix, 0.32)}
       strokeWidth={renderMode === "export" ? 1.18 : 1.34}
       strokeLinecap="round"
       strokeLinejoin="round"
@@ -1429,17 +1596,19 @@ function helixSsDrawGroup(
   width: number,
   residueCount: number,
   renderMode: RenderMode,
+  palette: StructurePalette,
 ): ReactElement[] {
   const residues = Math.max(1, residueCount);
   const unit = width / residues;
-  const scale = renderMode === "export" ? 5.6 : 6.1;
-  const front = "#98a4b5";
-  const back = "#d6dce5";
-  const stroke = "#4a5565";
+  const scale = renderMode === "export" ? 4.55 : 4.95;
+  const front = palette.helix;
+  const back = lightenHex(palette.helix, 0.38);
+  const stroke = darkenHex(palette.helix, 0.55);
   const strokeWidth = renderMode === "export" ? 0.6 : 0.72;
 
   // Geometry ported from SSDraw's build_helix() and translated into SVG coordinates.
-  const y = (value: number) => laneY - value * scale;
+  const baselineY = laneY + (renderMode === "export" ? 4.25 : 4.6);
+  const y = (value: number) => baselineY - value * scale;
   const xPos = (value: number) => x + value * unit;
   const polygons: ReactElement[] = [];
 
@@ -1543,6 +1712,7 @@ function ssdrawStrand(
   residueCount: number,
   renderMode: RenderMode,
   nextSymbol: "H" | "E" | "T" | null,
+  palette: StructurePalette,
 ): ReactElement {
   const residues = Math.max(1, residueCount);
   const unit = width / residues;
@@ -1558,8 +1728,8 @@ function ssdrawStrand(
     <polygon
       key={`ssdraw_strand_${blockIndex}_${index}`}
       points={points}
-      fill="#d7dde6"
-      stroke="#4a5565"
+      fill={lightenHex(palette.strand, 0.28)}
+      stroke={darkenHex(palette.strand, 0.5)}
       strokeWidth={renderMode === "export" ? 0.58 : 0.72}
       strokeLinejoin="miter"
     />
@@ -1576,6 +1746,7 @@ function ssdrawLoop(
   renderMode: RenderMode,
   previousSymbol: "H" | "E" | "T" | null,
   nextSymbol: "H" | "E" | "T" | null,
+  palette: StructurePalette,
 ): ReactElement {
   const residues = Math.max(1, residueCount);
   const unit = width / residues;
@@ -1593,8 +1764,8 @@ function ssdrawLoop(
     endX = x + width - unit * 0.68;
   }
 
-  const barHeight = renderMode === "export" ? 2.05 : 2.35;
-  const y = laneY + (renderMode === "export" ? 3.9 : 4.35);
+  const barHeight = renderMode === "export" ? 1.95 : 2.2;
+  const y = laneY + (renderMode === "export" ? 6.1 : 6.45);
   return (
     <rect
       key={`ssdraw_loop_${blockIndex}_${index}`}
@@ -1603,8 +1774,8 @@ function ssdrawLoop(
       width={Math.max(unit * 0.4, endX - startX)}
       height={barHeight}
       rx={barHeight / 2}
-      fill="#d8dee7"
-      stroke="#4a5565"
+      fill={palette.loop}
+      stroke={darkenHex(palette.loop, 0.22)}
       strokeWidth={renderMode === "export" ? 0.48 : 0.58}
     />
   );
@@ -1617,6 +1788,7 @@ function protopoHelix(
   laneY: number,
   width: number,
   renderMode: RenderMode,
+  palette: StructurePalette,
 ): ReactElement[] {
   const height = renderMode === "export" ? 8.4 : 9.2;
   const y = laneY + (renderMode === "export" ? 0.6 : 0.9);
@@ -1627,8 +1799,8 @@ function protopoHelix(
       y={y}
       width={width}
       height={height}
-      fill="#b67457"
-      stroke="#3f2a1f"
+      fill={palette.helix}
+      stroke={darkenHex(palette.helix, 0.58)}
       strokeWidth={renderMode === "export" ? 0.65 : 0.78}
       rx={height * 0.2}
     />,
@@ -1642,6 +1814,7 @@ function protopoStrand(
   laneY: number,
   width: number,
   renderMode: RenderMode,
+  palette: StructurePalette,
 ): ReactElement {
   const yMid = laneY + (renderMode === "export" ? 4.85 : 5.25);
   const bodyHalf = renderMode === "export" ? 2.75 : 3.05;
@@ -1653,8 +1826,8 @@ function protopoStrand(
     <polygon
       key={`protopo_strand_${blockIndex}_${index}`}
       points={points}
-      fill="#73a96a"
-      stroke="#244327"
+      fill={palette.strand}
+      stroke={darkenHex(palette.strand, 0.58)}
       strokeWidth={renderMode === "export" ? 0.65 : 0.8}
       strokeLinejoin="miter"
     />
@@ -1668,6 +1841,7 @@ function protopoLinker(
   laneY: number,
   width: number,
   renderMode: RenderMode,
+  palette: StructurePalette,
 ): ReactElement {
   const y = laneY + (renderMode === "export" ? 5.1 : 5.5);
   return (
@@ -1677,11 +1851,64 @@ function protopoLinker(
       x2={x + width}
       y1={y}
       y2={y}
-      stroke="#4b5563"
+      stroke={palette.connector}
       strokeWidth={renderMode === "export" ? 1.6 : 1.9}
       strokeLinecap="round"
     />
   );
+}
+
+function structureConnector(
+  blockIndex: number,
+  index: number,
+  startX: number,
+  endX: number,
+  startY: number,
+  endY: number,
+  renderMode: RenderMode,
+  palette: StructurePalette,
+  style: StructureRenderStyle,
+): ReactElement {
+  const midY = (startY + endY) / 2;
+  const stroke = palette.connector;
+  const strokeWidth = style === "protopo" ? (renderMode === "export" ? 2.2 : 2.5) : renderMode === "export" ? 1.65 : 1.9;
+  return (
+    <path
+      key={`track_connector_${blockIndex}_${index}`}
+      d={`M ${startX.toFixed(2)} ${startY.toFixed(2)} C ${(startX + 6).toFixed(2)} ${midY.toFixed(2)} ${(endX - 6).toFixed(2)} ${midY.toFixed(2)} ${endX.toFixed(2)} ${endY.toFixed(2)}`}
+      fill="none"
+      stroke={stroke}
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      opacity={0.95}
+    />
+  );
+}
+
+function hexToRgb(color: string): { r: number; g: number; b: number } {
+  const normalized = color.replace("#", "");
+  const expanded = normalized.length === 3 ? normalized.split("").map((char) => `${char}${char}`).join("") : normalized;
+  return {
+    r: Number.parseInt(expanded.slice(0, 2), 16),
+    g: Number.parseInt(expanded.slice(2, 4), 16),
+    b: Number.parseInt(expanded.slice(4, 6), 16),
+  };
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  return `#${[r, g, b]
+    .map((value) => Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+function lightenHex(color: string, amount: number): string {
+  const { r, g, b } = hexToRgb(color);
+  return rgbToHex(r + (255 - r) * amount, g + (255 - g) * amount, b + (255 - b) * amount);
+}
+
+function darkenHex(color: string, amount: number): string {
+  const { r, g, b } = hexToRgb(color);
+  return rgbToHex(r * (1 - amount), g * (1 - amount), b * (1 - amount));
 }
 
 function countTrackSegmentsBefore(residues: string, endExclusive: number, symbol: "H" | "E"): number {

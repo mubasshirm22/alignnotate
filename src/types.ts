@@ -113,7 +113,15 @@ export type VisualizationMode =
   | "residue";
 
 export type EspriptPreset = "classic" | "flashy" | "identity";
+export type EspriptScoreMode = "B" | "I" | "S" | "M" | "E";
 export type StructureRenderStyle = "classic" | "ssdraw" | "protopo";
+
+export type StructurePalette = {
+  helix: string;
+  strand: string;
+  loop: string;
+  connector: string;
+};
 
 export type ConservationColorOverrides = {
   strict: string;
